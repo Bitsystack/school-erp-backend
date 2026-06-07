@@ -5,6 +5,7 @@ import helmet from "helmet";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import authRoutes from "./modules/auth/auth.route";
+import organizationRoutes from "./modules/organization/organization.routes";
 
 const app: Application = express();
 app.use(helmet());
@@ -35,6 +36,7 @@ app.get("/", (_req: Request, res: Response) => {
 });
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/organization", organizationRoutes);
 
 /**
  * API Routes

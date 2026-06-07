@@ -1,0 +1,44 @@
+---------> Register 
+
+/api/v1/auth/register ----> POST
+
+Payload = {
+  "user_name": "Ashish Kumar",
+  "user_email": "ashish1@yopmail.com",
+  "user_phone": "9876543200",
+  "user_password": "123456",
+  "user_country":"India",
+  "user_business_type":"School"
+}
+
+
+---------> Verify Email
+
+/api/v1/auth/verify-email?token=46662b85960dfaf18f4db1fdbea261b35e9063bc7d8afeeb8a018f59f80f83d7         -----> GET
+
+
+---------> Verify Email
+
+/api/v1/auth/login         -----> POST
+
+Payload = {
+  "user_email": "ashish1@yopmail.com",
+  "user_password": "123456"
+}
+
+
+---------> forgot password
+/api/v1/auth/forgot-password   -----> POST
+
+Payload = {
+    "user_email":"ashish@yopmail.com"
+}
+
+
+---------> reset password
+/api/v1/auth/reset-password   -----> POST
+
+{
+    "token":"8b86e2a5c79601afb9a0663715b5eec7f65a4230f17b80b84a80d42f5f8e5421",
+    "password":"000000"
+}
