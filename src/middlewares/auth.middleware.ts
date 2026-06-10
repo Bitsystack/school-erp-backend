@@ -21,7 +21,7 @@ export const authMiddleware = async (
 
     const token = authHeader.split(" ")[1];
 
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET!) as {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
       userId: string;
       roleId: string;
       organizationId?: string;
@@ -42,7 +42,7 @@ export const authMiddleware = async (
         message: "Account is inactive",
       });
     }
-
+   
     req.user = {
       userId: decoded.userId,
       roleId: decoded.roleId,
