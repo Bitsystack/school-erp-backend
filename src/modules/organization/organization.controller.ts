@@ -52,15 +52,25 @@ export const CreateOrganization = async (req: any, res: Response) => {
 
     const { accessToken, refreshToken } = generateTokens(payload);
 
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 24 * 60 * 60 * 1000,
+    });
+
     return res.status(201).json({
       success: true,
       message: "Organization created successfully",
 
       data: {
-        token: {
-          accessToken,
-          refreshToken,
-        },
         organization,
       },
     });

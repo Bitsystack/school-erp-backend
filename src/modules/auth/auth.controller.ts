@@ -146,12 +146,24 @@ export const Login = async (req: Request, res: Response) => {
 
     await user.save();
 
+    res.cookie("accessToken", accessToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 15 * 60 * 1000, // 15 min
+    });
+
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "strict",
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
+
     return res.status(200).json({
       success: true,
       message: "Login successful",
       data: {
-        accessToken,
-        refreshToken,
         user: {
           _id: user._id,
           user_name: user.user_name,

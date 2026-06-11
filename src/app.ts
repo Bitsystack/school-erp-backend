@@ -6,12 +6,13 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import authRoutes from "./modules/auth/auth.route";
 import organizationRoutes from "./modules/organization/organization.routes";
+import userRoutes from "./modules/users/user.routes";
 
 const app: Application = express();
 app.use(helmet());
 app.use(
   cors({
-    origin: "*",
+    origin: "http://localhost:5173",
     credentials: true,
   }),
 );
@@ -37,6 +38,7 @@ app.get("/", (_req: Request, res: Response) => {
 
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/organization", organizationRoutes);
+app.use("/api/v1/user", userRoutes);
 
 /**
  * API Routes

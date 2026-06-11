@@ -10,16 +10,16 @@ export const authMiddleware = async (
   next: NextFunction,
 ) => {
   try {
-    const authHeader = req.headers.authorization;
+    const token = req.cookies.accessToken;
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!token) {
       return res.status(401).json({
         success: false,
         message: "Access token required",
       });
     }
 
-    const token = authHeader.split(" ")[1];
+    // const token = authHeader.split(" ")[1];
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
       userId: string;
@@ -42,7 +42,7 @@ export const authMiddleware = async (
         message: "Account is inactive",
       });
     }
-   
+
     req.user = {
       userId: decoded.userId,
       roleId: decoded.roleId,
