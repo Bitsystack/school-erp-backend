@@ -61,6 +61,7 @@ export const CreateTeacher = async (req: any, res: Response) => {
       user_role_id: teacherRole._id.toString(),
       user_organization_id: organizationId,
       user_isActive: true,
+      user_country: req.body.teacher_country,
     });
 
     // Create Teacher Profile
@@ -100,7 +101,7 @@ export const CreateTeacher = async (req: any, res: Response) => {
 export const GetTeachers = async (req: any, res: Response) => {
   const { organizationId } = req.user;
   const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
+  const limit = Number(req.query.pageSize) || 10;
   const search = String(req.query.search || "");
   const skip = (page - 1) * limit;
   try {
@@ -156,7 +157,6 @@ export const GetTeachers = async (req: any, res: Response) => {
 
         return {
           ...teacher,
-          user: user || {},
           role: role || {},
         };
       }),

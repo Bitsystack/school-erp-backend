@@ -10,6 +10,8 @@ import {
 } from "./teacher.controller";
 
 import { authMiddleware } from "../../middlewares/auth.middleware";
+import { UploadImage } from "./upload.controller";
+import { upload } from "../../middlewares/upload.middleware";
 
 const teacherRoutes = Router();
 
@@ -30,5 +32,11 @@ teacherRoutes.patch("/status/:id", authMiddleware, ToggleTeacherStatus);
 
 // Delete Teacher (Soft Delete)
 teacherRoutes.delete("/delete/:id", authMiddleware, DeleteTeacher);
+teacherRoutes.post(
+  "/add-image",
+  authMiddleware,
+  upload.single("image"),
+  UploadImage,
+);
 
 export default teacherRoutes;

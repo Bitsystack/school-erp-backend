@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import cloudinary from "../../config/cloudinary";
 
-export const UploadLogo = async (req: Request, res: Response) => {
+export const UploadImage = async (req: Request, res: Response) => {
   try {
     const file = (req as any).file;
 
