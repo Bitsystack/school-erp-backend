@@ -8,6 +8,7 @@ import authRoutes from "./modules/auth/auth.route";
 import organizationRoutes from "./modules/organization/organization.routes";
 import userRoutes from "./modules/users/user.routes";
 import roleRoutes from "./modules/roles/role.routes";
+import teacherRoutes from "./modules/teachers/teacher.routes";
 
 const app: Application = express();
 app.use(helmet());
@@ -41,6 +42,7 @@ app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/organization", organizationRoutes);
 app.use("/api/v1/user", userRoutes);
 app.use("/api/v1/role", roleRoutes);
+app.use("/api/v1/teacher", teacherRoutes);
 
 /**
  * API Routes
