@@ -1,44 +1,396 @@
----------> Register 
+====================================================================
+  SCHOOL ERP - COMPLETE API DOCUMENTATION
+  Base URL: http://localhost:5000/api/v1
+====================================================================
 
-/api/v1/auth/register ----> POST
+All protected routes require:
+  Cookie: accessToken (set automatically on login)
 
-Payload = {
-  "user_name": "Ashish Kumar",
-  "user_email": "ashish1@yopmail.com",
-  "user_phone": "9876543200",
-  "user_password": "123456",
-  "user_country":"India",
-  "user_business_type":"School"
+Response format:
+  { success: boolean, message: string, data: any, pagination?: {...} }
+
+Pagination query params (on list endpoints):
+  ?page=1&limit=10&search=keyword
+
+====================================================================
+AUTH  /api/v1/auth
+====================================================================
+
+ONBOARDING FLOW (New User from Landing Page):
+─────────────────────────────────────────────
+  1. POST /register          → User fills name, email, phone, password
+                               → Verification email sent
+                               → Response: { user_id, user_isEmailVerified: false }
+
+  2. GET  /verify-email?token=  → User clicks link in email
+                                 → Auto-login (cookies set)
+                                 → Response: { user_hasBusiness: false }
+                                 → Frontend redirects to /setup-school
+
+  3. POST /setup-organization  [Auth]
+                               → User fills school name, phone, email, country
+                               → Organization created + linked to user
+                               → New tokens issued (with organizationId)
+                               → Response: { organization, user }
+                               → Frontend redirects to /dashboard ✅
+
+─────────────────────────────────────────────
+POST   /register
+  Body: {
+    user_name, user_email, user_phone, user_password,
+    user_country,
+    user_business_type: "School"|"College"|"Coaching"|"University"|"Other"
+  }
+
+GET    /verify-email?token=TOKEN
+  → Verifies email, auto-login, sets cookies
+
+POST   /resend-verification
+  Body: { user_email }
+
+POST   /setup-organization    [Auth — after email verify]
+  Body: {
+    organization_name, organization_phone, organization_email,
+    organization_country, organization_address?,
+    organization_pincode?, organization_website?,
+    organization_whatsapp?, organization_gstin?, organization_upi_id?
+  }
+
+POST   /login
+  Body: { user_email, user_password }
+  Response includes:
+    user_isEmailVerified  → false = redirect to /verify-email
+    user_hasBusiness      → false = redirect to /setup-school
+    else                  → redirect to /dashboard
+
+POST   /logout             Clears cookies
+
+POST   /refresh-token      Rotates tokens (call when 401)
+
+POST   /forgot-password
+  Body: { user_email }
+
+POST   /reset-password
+  Body: { token, password }
+
+POST   /change-password    [Auth]
+  Body: { current_password, new_password }
+  → Clears session, user must re-login
+
+─────────────────────────────────────────────
+FRONTEND ROUTING LOGIC (after login/verify):
+─────────────────────────────────────────────
+  if (!user_isEmailVerified)  → /verify-email
+  else if (!user_hasBusiness) → /setup-school
+  else                        → /dashboard
+
+====================================================================
+USER  /api/v1/user
+====================================================================
+GET    /my-info               [Auth] Get logged-in user profile
+
+====================================================================
+ORGANIZATION  /api/v1/organization
+====================================================================
+GET    /organizations         [Auth] List all organizations (admin)
+GET    /organization/:id      [Auth] Get organization by ID
+POST   /create                [Auth] Create organization
+PATCH  /update                [Auth] Update own organization
+DELETE /delete                [Auth] Delete own organization
+POST   /logo                  [Auth] Upload org logo (multipart)
+
+====================================================================
+ROLES  /api/v1/role
+====================================================================
+POST   /add                   [Auth] Create role
+GET    /list                  [Auth] List roles
+GET    /:id                   [Auth] Get role
+PATCH  /:id                   [Auth] Update role
+DELETE /:id                   [Auth] Delete role
+
+====================================================================
+CLASSES  /api/v1/class
+====================================================================
+POST   /create                [Auth] Create class
+GET    /list                  [Auth] List classes  (?search=)
+GET    /:id                   [Auth] Get class
+PATCH  /update/:id            [Auth] Update class
+DELETE /delete/:id            [Auth] Delete class
+
+Body (create): { class_name, class_numeric?, class_description? }
+
+====================================================================
+SECTIONS  /api/v1/section
+====================================================================
+POST   /create                [Auth] Create section
+GET    /list                  [Auth] List sections  (?class_id=)
+GET    /:id                   [Auth] Get section
+PATCH  /update/:id            [Auth] Update section
+DELETE /delete/:id            [Auth] Delete section
+
+Body (create): { class_id, section_name, section_capacity?, section_class_teacher_id? }
+
+====================================================================
+SUBJECTS  /api/v1/subject
+====================================================================
+POST   /create                [Auth] Create subject
+GET    /list                  [Auth] List subjects  (?class_id=)
+GET    /:id                   [Auth] Get subject
+PATCH  /update/:id            [Auth] Update subject
+DELETE /delete/:id            [Auth] Delete subject
+
+Body (create): { class_id, subject_name, subject_code, subject_type?, subject_teacher_id?,
+                 subject_full_marks?, subject_pass_marks? }
+
+====================================================================
+TEACHERS  /api/v1/teacher
+====================================================================
+POST   /create                [Auth] Create teacher (auto user + credentials)
+GET    /list                  [Auth] List teachers  (?search=&pageSize=)
+GET    /:id                   [Auth] Get teacher
+PATCH  /update/:id            [Auth] Update teacher
+PATCH  /status/:id            [Auth] Toggle active/inactive
+DELETE /delete/:id            [Auth] Soft delete
+POST   /add-image             [Auth] Upload photo (multipart: image)
+
+====================================================================
+STUDENTS  /api/v1/student
+====================================================================
+POST   /create                [Auth] Admit student (auto user + credentials)
+GET    /list                  [Auth] List students  (?class_id=&section_id=&status=)
+GET    /:id                   [Auth] Get student
+PATCH  /update/:id            [Auth] Update student
+PATCH  /status/:id            [Auth] Toggle active/inactive
+DELETE /delete/:id            [Auth] Soft delete
+
+Body (create): { student_name, student_email, student_phone, student_gender,
+                 student_dob, student_class_id?, student_section_id?,
+                 father_name?, father_phone?, mother_name?, mother_phone?, ... }
+
+====================================================================
+STAFF  /api/v1/staff
+====================================================================
+POST   /create                [Auth] Create staff member
+GET    /list                  [Auth] List staff  (?department=)
+GET    /:id                   [Auth] Get staff
+PATCH  /update/:id            [Auth] Update staff
+PATCH  /status/:id            [Auth] Toggle active/inactive
+DELETE /delete/:id            [Auth] Soft delete
+
+====================================================================
+ATTENDANCE  /api/v1/attendance
+====================================================================
+POST   /mark                  [Auth] Mark attendance (bulk)
+GET    /by-date               [Auth] Get attendance by date  (?class_id=&section_id=&date=YYYY-MM-DD)
+GET    /student/:student_id   [Auth] Student attendance  (?month=&year=)
+GET    /class-summary         [Auth] Class attendance summary  (?class_id=&month=&year=)
+
+Body (mark): {
+  class_id, section_id, attendance_date,
+  attendance_records: [{ student_id, status: "Present"|"Absent"|"Late"|"Leave", remark? }]
 }
 
+====================================================================
+EXAMS  /api/v1/exam
+====================================================================
+POST   /create                [Auth] Create exam
+GET    /list                  [Auth] List exams  (?class_id=&status=)
+GET    /:id                   [Auth] Get exam
+PATCH  /update/:id            [Auth] Update exam
+DELETE /delete/:id            [Auth] Delete exam
 
----------> Verify Email
+Body (create): { class_id, exam_name, exam_term?, exam_session?,
+                 exam_start_date, exam_end_date, exam_status? }
 
-/api/v1/auth/verify-email?token=46662b85960dfaf18f4db1fdbea261b35e9063bc7d8afeeb8a018f59f80f83d7         -----> GET
+====================================================================
+MARKS  /api/v1/mark
+====================================================================
+POST   /enter                 [Auth] Enter marks (bulk upsert)
+GET    /by-exam               [Auth] Marks by exam  (?exam_id=&subject_id=&class_id=)
+GET    /student/:student_id   [Auth] Student all marks  (?exam_id=)
+GET    /result/:student_id/:exam_id  [Auth] Full result card with grade + pass/fail
+PATCH  /update/:id            [Auth] Update a single mark
 
-
----------> Verify Email
-
-/api/v1/auth/login         -----> POST
-
-Payload = {
-  "user_email": "ashish1@yopmail.com",
-  "user_password": "123456"
+Body (enter): {
+  exam_id, subject_id, class_id,
+  marks: [{ student_id, mark_obtained, mark_full, mark_pass, mark_remark? }]
 }
 
+====================================================================
+FEES  /api/v1/fee
+====================================================================
+POST   /structure/create      [Auth] Create fee structure
+GET    /structure/list        [Auth] List fee structures  (?class_id=)
+POST   /collect               [Auth] Collect fee payment
+GET    /collections           [Auth] All collections  (?start_date=&end_date=)
+GET    /student/:student_id   [Auth] Student fee history
+GET    /stats                 [Auth] Monthly fee stats  (?month=&year=)
 
----------> forgot password
-/api/v1/auth/forgot-password   -----> POST
+Body (collect): { student_id, fee_structure_id, collection_amount_paid,
+                  collection_discount?, collection_fine?,
+                  collection_payment_mode: "Cash"|"Online"|"Cheque"|"Bank Transfer",
+                  collection_month? }
 
-Payload = {
-    "user_email":"ashish@yopmail.com"
-}
+====================================================================
+TIMETABLE  /api/v1/timetable
+====================================================================
+POST   /create                [Auth] Add timetable slot
+GET    /                      [Auth] Get timetable  (?class_id=&section_id=&teacher_id=&day=)
+PATCH  /update/:id            [Auth] Update slot
+DELETE /delete/:id            [Auth] Delete slot
 
+Body (create): { class_id, section_id, subject_id, teacher_id,
+                 timetable_day, timetable_start_time, timetable_end_time,
+                 timetable_period_no?, timetable_room?, timetable_session? }
 
----------> reset password
-/api/v1/auth/reset-password   -----> POST
+====================================================================
+HOMEWORK  /api/v1/homework
+====================================================================
+POST   /create                [Auth] Assign homework
+GET    /list                  [Auth] List homework  (?class_id=&section_id=&subject_id=)
+GET    /:id                   [Auth] Get homework
+PATCH  /update/:id            [Auth] Update homework
+DELETE /delete/:id            [Auth] Soft delete
 
-{
-    "token":"8b86e2a5c79601afb9a0663715b5eec7f65a4230f17b80b84a80d42f5f8e5421",
-    "password":"000000"
-}
+====================================================================
+ANNOUNCEMENTS  /api/v1/announcement
+====================================================================
+POST   /create                [Auth] Create announcement
+GET    /list                  [Auth] List  (?target=All|Teachers|Students|Parents|Staff)
+GET    /:id                   [Auth] Get announcement
+PATCH  /update/:id            [Auth] Update
+DELETE /delete/:id            [Auth] Delete
+
+====================================================================
+EVENTS  /api/v1/event
+====================================================================
+POST   /create                [Auth] Create event
+GET    /list                  [Auth] List events  (?status=Upcoming|Ongoing|Completed)
+GET    /:id                   [Auth] Get event
+PATCH  /update/:id            [Auth] Update
+DELETE /delete/:id            [Auth] Delete
+
+====================================================================
+LEAVES  /api/v1/leave
+====================================================================
+POST   /apply                 [Auth] Apply for leave
+GET    /list                  [Auth] All leaves  (?status=Pending|Approved|Rejected)
+GET    /my-leaves             [Auth] Current user's leaves
+GET    /:id                   [Auth] Get leave
+PATCH  /action/:id            [Auth] Approve/Reject
+
+Body (action): { action: "Approved"|"Rejected", rejection_reason? }
+
+====================================================================
+SALARY  /api/v1/salary
+====================================================================
+POST   /generate              [Auth] Generate salary slip
+GET    /list                  [Auth] All records  (?salary_month=2024-01&employee_type=Teacher)
+GET    /employee/:employee_id [Auth] Employee salary history
+PATCH  /pay/:id               [Auth] Mark as paid
+
+Body (generate): { employee_id, employee_type: "Teacher"|"Staff",
+                   salary_month: "YYYY-MM", salary_basic,
+                   salary_allowances?, salary_deductions?, salary_bonus?, salary_fine? }
+
+====================================================================
+LIBRARY  /api/v1/library
+====================================================================
+POST   /book/create           [Auth] Add book
+GET    /book/list             [Auth] List books  (?category=&search=)
+GET    /book/:id              [Auth] Get book
+PATCH  /book/update/:id       [Auth] Update book
+DELETE /book/delete/:id       [Auth] Remove book (soft)
+POST   /issue                 [Auth] Issue book
+PATCH  /return/:issue_id      [Auth] Return book  (Body: { fine_per_day? })
+GET    /issues                [Auth] Active issues  (?status=Issued|Returned|Overdue)
+
+Body (issue): { book_id, member_id, member_type: "Student"|"Teacher"|"Staff", due_date }
+
+====================================================================
+HOSTEL  /api/v1/hostel
+====================================================================
+POST   /create                [Auth] Create hostel
+GET    /list                  [Auth] List hostels
+POST   /room/create           [Auth] Add room to hostel
+GET    /room/:hostel_id       [Auth] Rooms of a hostel
+POST   /allot                 [Auth] Allot room to student
+PATCH  /vacate/:id            [Auth] Vacate allotment
+
+Body (allot): { hostel_id, room_id, student_id, allotment_date? }
+
+====================================================================
+TRANSPORT  /api/v1/transport
+====================================================================
+POST   /vehicle/create        [Auth] Add vehicle
+GET    /vehicle/list          [Auth] List vehicles
+POST   /route/create          [Auth] Create route
+GET    /route/list            [Auth] List routes
+POST   /assign                [Auth] Assign student to route
+GET    /assignments           [Auth] All assignments  (?route_id=)
+
+Body (assign): { student_id, route_id, vehicle_id, pickup_stop?, drop_stop?, monthly_fare? }
+
+====================================================================
+ADMISSIONS  /api/v1/admission
+====================================================================
+POST   /create                [Auth] New admission enquiry
+GET    /list                  [Auth] List  (?status=Pending|Approved|Rejected|Enrolled)
+GET    /:id                   [Auth] Get admission
+PATCH  /status/:id            [Auth] Update status
+
+Body (status): { status: "Approved"|"Rejected"|"Enrolled", notes? }
+
+====================================================================
+COMPLAINTS  /api/v1/complaint
+====================================================================
+POST   /raise                 [Auth] Raise complaint
+GET    /list                  [Auth] List  (?status=Open|In Progress|Resolved|Closed)
+PATCH  /status/:id            [Auth] Update status
+
+Body (status): { status: "In Progress"|"Resolved"|"Closed", resolution_note? }
+
+====================================================================
+DASHBOARD  /api/v1/dashboard
+====================================================================
+GET    /stats                 [Auth] Full dashboard stats
+
+Response includes:
+  - overview (students, teachers, staff, classes)
+  - attendance_today (present, absent, percentage)
+  - finance (monthly_fee_collected)
+  - alerts (pending leaves, open complaints, pending admissions, overdue books)
+  - upcoming_exams (next 5)
+  - recent_announcements (last 5)
+
+====================================================================
+SEED
+====================================================================
+Run once to create system roles + super admin:
+  npm run seed
+
+Default super admin:
+  Email:    admin@schoolerp.com  (or SUPER_ADMIN_EMAIL in .env)
+  Password: Admin@12345          (or SUPER_ADMIN_PASSWORD in .env)
+
+====================================================================
+SYSTEM ROLES
+====================================================================
+  SUPER_ADMIN        → Full platform access
+  ORGANIZATION_ADMIN → Full access to own org
+  TEACHER            → Class, attendance, marks, homework
+  STUDENT            → View own data, fees, timetable
+  PARENT             → View child's data, complaints
+  ACCOUNTANT         → Fee & salary modules
+  LIBRARIAN          → Library module
+  STAFF              → Announcements, events, leaves
+
+====================================================================
+NOTES
+====================================================================
+- All data is scoped by organization_id (multi-tenant)
+- Soft deletes used for students, teachers, staff (status = false)
+- Bulk operations supported: attendance mark, marks entry
+- Auto-generated IDs: admission no, employee ID, receipt no
+- Image upload via Cloudinary (teacher photo, org logo)
+====================================================================

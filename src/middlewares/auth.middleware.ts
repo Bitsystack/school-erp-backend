@@ -24,7 +24,7 @@ export const authMiddleware = async (
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as {
       userId: string;
       roleId: string;
-      organizationId?: string;
+      organizationId: string;
     };
 
     const user = await User.findById(decoded.userId);
@@ -46,7 +46,7 @@ export const authMiddleware = async (
     req.user = {
       userId: decoded.userId,
       roleId: decoded.roleId,
-      organizationId: decoded.organizationId,
+      organizationId: decoded.organizationId || "",
     };
 
     next();
