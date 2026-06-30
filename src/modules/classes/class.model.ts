@@ -3,7 +3,7 @@ import mongoose, { Schema, Document } from "mongoose";
 export interface IClass extends Document {
   organization_id: mongoose.Types.ObjectId;
   class_name: string;
-  class_numeric?: number;
+  class_code: string;
   class_description?: string;
   class_status: boolean;
 }
@@ -16,7 +16,7 @@ const classSchema = new Schema<IClass>(
       required: true,
     },
     class_name: { type: String, required: true, trim: true },
-    class_numeric: { type: Number },
+    class_code: { type: String, required: true, trim: true },
     class_description: String,
     class_status: { type: Boolean, default: true },
   },

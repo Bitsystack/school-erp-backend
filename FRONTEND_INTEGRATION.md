@@ -1,1182 +1,1447 @@
-# School ERP — Frontend Integration Guide
+# School ERP — Frontend Integration (TypeScript)
 
-> **Base URL:** `http://localhost:5000/api/v1`  
-> **Production:** Set `VITE_API_URL` in your frontend `.env`
-
----
-
-## Table of Contents
-1. [Setup & Config](#1-setup--config)
-2. [Authentication Flow](#2-authentication-flow)
-3. [Axios Instance & Interceptors](#3-axios-instance--interceptors)
-4. [Auth APIs](#4-auth-apis)
-5. [Organization APIs](#5-organization-apis)
-6. [Class, Section, Subject APIs](#6-class-section-subject-apis)
-7. [Teacher APIs](#7-teacher-apis)
-8. [Student APIs](#8-student-apis)
-9. [Staff APIs](#9-staff-apis)
-10. [Attendance APIs](#10-attendance-apis)
-11. [Exam & Marks APIs](#11-exam--marks-apis)
-12. [Fee APIs](#12-fee-apis)
-13. [Timetable APIs](#13-timetable-apis)
-14. [Homework APIs](#14-homework-apis)
-15. [Announcements & Events APIs](#15-announcements--events-apis)
-16. [Leave APIs](#16-leave-apis)
-17. [Salary APIs](#17-salary-apis)
-18. [Library APIs](#18-library-apis)
-19. [Hostel APIs](#19-hostel-apis)
-20. [Transport APIs](#20-transport-apis)
-21. [Admission APIs](#21-admission-apis)
-22. [Complaint APIs](#22-complaint-apis)
-23. [Dashboard API](#23-dashboard-api)
-24. [Error Handling Reference](#24-error-handling-reference)
-25. [Role & Permissions Reference](#25-role--permissions-reference)
+> Base URL: `http://localhost:5000/api/v1`  
+> Stack: React + TypeScript + Axios  
+> Auth: HTTP-only cookies (auto-managed by browser)
 
 ---
 
-## 1. Setup & Config
+## 1. Project Setup
 
-### Frontend `.env`
+### `.env`
 ```env
 VITE_API_URL=http://localhost:5000/api/v1
 ```
 
-### Important Notes
-- All requests use **HTTP-only cookies** (no localStorage tokens needed)
-- Set `withCredentials: true` on every request
-- `Content-Type: application/json` for all JSON requests
-- `Content-Type: multipart/form-data` for file uploads
-
----
-
-## 2. Authentication Flow
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                     NEW USER JOURNEY                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Landing Page                                               │
-│      │                                                      │
-│      ▼                                                      │
-│  POST /auth/register  ──► Email sent ──► Check inbox        │
-│                                              │              │
-│      ┌───────────────────────────────────────┘              │
-│      ▼                                                      │
-│  GET /auth/verify-email?token=xxx                           │
-│      │  (auto-login cookies set)                            │
-│      ▼                                                      │
-│  Response: { user_hasBusiness: false }                      │
-│      │                                                      │
-│      ▼                                                      │
-│  /setup-school page                                         │
-│      │                                                      │
-│      ▼                                                      │
-│  POST /auth/setup-organization                              │
-│      │  (tokens refreshed with organizationId)              │
-│      ▼                                                      │
-│  /dashboard ✅                                              │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│                  RETURNING USER JOURNEY                     │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  POST /auth/login                                           │
-│      │                                                      │
-│      ├── user_isEmailVerified = false  ──► /verify-email    │
-│      ├── user_hasBusiness = false      ──► /setup-school    │
-│      └── both true                    ──► /dashboard ✅     │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Frontend Route Guard Logic
-```typescript
-// In your router guard / middleware
-const routeGuard = (user: User) => {
-  if (!user.user_isEmailVerified) return '/verify-email'
-  if (!user.user_hasBusiness)     return '/setup-school'
-  return '/dashboard'
-}
+### Install
+```bash
+npm install axios
 ```
 
 ---
 
-## 3. Axios Instance & Interceptors
+## 2. Axios Instance — `src/lib/api.ts`
 
 ```typescript
-// lib/axios.ts
-import axios from 'axios'
+import axios, { AxiosInstance } from "axios";
 
-const api = axios.create({
+const api: AxiosInstance = axios.create({
   baseURL: import.meta.env.VITE_API_URL,
-  withCredentials: true,          // REQUIRED — sends cookies
-  headers: { 'Content-Type': 'application/json' },
-})
+  withCredentials: true, // REQUIRED — sends cookies
+  headers: { "Content-Type": "application/json" },
+});
 
-// ── Request interceptor (optional logging) ──────────────────
-api.interceptors.request.use((config) => {
-  return config
-})
-
-// ── Response interceptor — auto refresh on 401 ───────────────
-let isRefreshing = false
-let failedQueue: any[] = []
-
-const processQueue = (error: any) => {
-  failedQueue.forEach(p => error ? p.reject(error) : p.resolve())
-  failedQueue = []
-}
+// Auto refresh on 401
+let isRefreshing = false;
+let queue: Array<() => void> = [];
 
 api.interceptors.response.use(
-  (response) => response,
+  (res) => res,
   async (error) => {
-    const originalRequest = error.config
-
-    // If 401 and not already retrying
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    const original = error.config;
+    if (error.response?.status === 401 && !original._retry) {
+      original._retry = true;
       if (isRefreshing) {
-        return new Promise((resolve, reject) => {
-          failedQueue.push({ resolve, reject })
-        }).then(() => api(originalRequest))
-          .catch(err => Promise.reject(err))
+        return new Promise((resolve) =>
+          queue.push(() => resolve(api(original)))
+        );
       }
-
-      originalRequest._retry = true
-      isRefreshing = true
-
+      isRefreshing = true;
       try {
-        await api.post('/auth/refresh-token')
-        processQueue(null)
-        return api(originalRequest)
-      } catch (refreshError) {
-        processQueue(refreshError)
-        // Refresh failed — redirect to login
-        window.location.href = '/login'
-        return Promise.reject(refreshError)
+        await api.post("/auth/refresh-token");
+        queue.forEach((fn) => fn());
+        queue = [];
+        return api(original);
+      } catch {
+        queue = [];
+        window.location.href = "/login";
       } finally {
-        isRefreshing = false
+        isRefreshing = false;
       }
     }
-
-    return Promise.reject(error)
+    return Promise.reject(error);
   }
-)
+);
 
-export default api
-```
-
----
-
-## 4. Auth APIs
-
-### 4.1 Register
-```
-POST /auth/register
-```
-**Request Body:**
-```json
-{
-  "user_name": "Rahul Sharma",
-  "user_email": "rahul@gmail.com",
-  "user_phone": "9876543210",
-  "user_password": "Rahul@123",
-  "user_country": "India",
-  "user_business_type": "School"
-}
-```
-> `user_business_type` enum: `"School" | "College" | "Coaching" | "University" | "Other"`  
-> Password rules: min 8 chars, 1 uppercase, 1 number
-
-**Success Response `201`:**
-```json
-{
-  "success": true,
-  "message": "Account created! Please check your email to verify your account.",
-  "data": {
-    "user_id": "66abc123...",
-    "user_email": "rahul@gmail.com",
-    "user_isEmailVerified": false,
-    "user_hasBusiness": false
-  }
-}
-```
-**Error Responses:**
-```json
-// 409 — Email already exists
-{ "success": false, "message": "An account with this email already exists" }
-
-// 422 — Validation failed
-{
-  "success": false,
-  "message": "Validation failed",
-  "errors": [{ "field": "user_password", "message": "Must contain at least one number" }]
-}
+export default api;
 ```
 
 ---
 
-### 4.2 Verify Email
-```
-GET /auth/verify-email?token=TOKEN_FROM_EMAIL
-```
-> No body needed. Token comes from email link query param.
+## 3. Types — `src/types/index.ts`
 
-**Success Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Email verified successfully!",
-  "data": {
-    "user_id": "66abc123...",
-    "user_hasBusiness": false
-  }
+```typescript
+export interface ApiResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
 }
-```
-> Cookies `accessToken` + `refreshToken` are set automatically.  
-> If `user_hasBusiness: false` → redirect to `/setup-school`
 
-**Error Response `400`:**
-```json
-{ "success": false, "message": "Invalid or expired verification link. Please request a new one." }
+export interface PaginatedResponse<T> {
+  success: boolean;
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasNextPage: boolean;
+    hasPrevPage: boolean;
+  };
+}
+
+export interface Role {
+  _id: string;
+  role_name: string;
+  role_display_name: string;
+  role_permissions: string[];
+}
+
+export interface Organization {
+  _id: string;
+  organization_name: string;
+  organization_email: string;
+  organization_phone: string;
+  organization_whatsapp?: string;
+  organization_website?: string;
+  organization_country: string;
+  organization_address?: string;
+  organization_pincode?: string;
+  organization_gstin?: string;
+  organization_upi_id?: string;
+  organization_logo?: string;
+  organization_owner_id: string;
+  createdAt: string;
+}
+
+export interface User {
+  _id: string;
+  user_name: string;
+  user_email: string;
+  user_phone: string;
+  user_country: string;
+  user_business_type: string;
+  user_isEmailVerified: boolean;
+  user_isActive: boolean;
+  user_hasBusiness: boolean;
+  user_organization_id: string;
+  user_lastLogin?: string;
+  role?: Role;
+  organization?: Organization;
+}
+
+export type BusinessType = "School" | "College" | "Coaching" | "University" | "Other";
+export type SubjectType = "Theory" | "Practical" | "Both";
+export type AttendanceStatus = "Present" | "Absent" | "Late" | "Leave";
+export type ExamStatus = "Upcoming" | "Ongoing" | "Completed" | "Cancelled";
+export type FeeFrequency = "Monthly" | "Quarterly" | "Annually" | "OneTime";
+export type PaymentMode = "Cash" | "Online" | "Cheque" | "Bank Transfer";
+export type WeekDay = "Monday" | "Tuesday" | "Wednesday" | "Thursday" | "Friday" | "Saturday" | "Sunday";
+export type LeaveType = "Sick" | "Casual" | "Earned" | "Maternity" | "Other";
+export type LeaveStatus = "Pending" | "Approved" | "Rejected";
+export type EmployeeType = "Teacher" | "Staff";
+export type AnnouncementTarget = "All" | "Teachers" | "Students" | "Parents" | "Staff";
+export type HostelType = "Boys" | "Girls" | "Mixed";
+export type RoomType = "Single" | "Double" | "Triple" | "Dormitory";
+export type MemberType = "Student" | "Teacher" | "Staff";
+export type ComplaintStatus = "Open" | "In Progress" | "Resolved" | "Closed";
+export type AdmissionStatus = "Pending" | "Approved" | "Rejected" | "Enrolled";
+export type Gender = "Male" | "Female" | "Other";
+```
+
+
+---
+
+## 4. Auth Service — `src/services/auth.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, User, Organization } from "../types";
+
+// ── Types ───────────────────────────────────────────────────
+export interface RegisterPayload {
+  user_name: string;
+  user_email: string;
+  user_phone: string;
+  user_password: string;       // min 8 chars, 1 uppercase, 1 number
+  user_country: string;
+  user_business_type: "School" | "College" | "Coaching" | "University" | "Other";
+}
+
+export interface SetupOrgPayload {
+  organization_name: string;   // required
+  organization_phone: string;  // required
+  organization_email: string;  // required
+  organization_country: string; // required
+  organization_address?: string;
+  organization_pincode?: string;
+  organization_website?: string;
+  organization_whatsapp?: string;
+  organization_gstin?: string;
+  organization_upi_id?: string;
+}
+
+export interface LoginPayload {
+  user_email: string;
+  user_password: string;
+}
+
+// ── Functions ────────────────────────────────────────────────
+export const authService = {
+  // Step 1: Register
+  register: (data: RegisterPayload) =>
+    api.post<ApiResponse<{ user_id: string; user_email: string; user_isEmailVerified: boolean; user_hasBusiness: boolean }>>("/auth/register", data),
+
+  // Step 2: Verify email (GET with token from email link)
+  verifyEmail: (token: string) =>
+    api.get<ApiResponse<{ user_id: string; user_hasBusiness: boolean }>>(`/auth/verify-email?token=${token}`),
+
+  // Resend verification
+  resendVerification: (user_email: string) =>
+    api.post<ApiResponse<null>>("/auth/resend-verification", { user_email }),
+
+  // Step 3: Setup school (after email verified)
+  setupOrganization: (data: SetupOrgPayload) =>
+    api.post<ApiResponse<{ organization: Organization; user: User }>>("/auth/setup-organization", data),
+
+  // Login
+  login: (data: LoginPayload) =>
+    api.post<ApiResponse<{ user: User }>>("/auth/login", data),
+
+  // Logout
+  logout: () => api.post<ApiResponse<null>>("/auth/logout"),
+
+  // Refresh token (called automatically by interceptor)
+  refreshToken: () => api.post<ApiResponse<null>>("/auth/refresh-token"),
+
+  // Forgot password
+  forgotPassword: (user_email: string) =>
+    api.post<ApiResponse<null>>("/auth/forgot-password", { user_email }),
+
+  // Reset password
+  resetPassword: (token: string, password: string) =>
+    api.post<ApiResponse<null>>("/auth/reset-password", { token, password }),
+
+  // Change password (logged-in)
+  changePassword: (current_password: string, new_password: string) =>
+    api.post<ApiResponse<null>>("/auth/change-password", { current_password, new_password }),
+
+  // Get my profile
+  getMe: () =>
+    api.get<ApiResponse<{ user: User; organization: Organization; role: any }>>("/user/my-info"),
+};
+
+// ── Routing helper after login/verify ───────────────────────
+export const getRedirectPath = (user: User): string => {
+  if (!user.user_isEmailVerified) return "/verify-email";
+  if (!user.user_hasBusiness) return "/setup-school";
+  return "/dashboard";
+};
 ```
 
 ---
 
-### 4.3 Resend Verification Email
-```
-POST /auth/resend-verification
-```
-**Request Body:**
-```json
-{ "user_email": "rahul@gmail.com" }
-```
-**Response `200`:**
-```json
-{ "success": true, "message": "Verification email resent successfully" }
-```
+## 5. Organization Service — `src/services/organization.service.ts`
 
----
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, Organization } from "../types";
 
-### 4.4 Setup Organization (Onboarding Step 2)
-```
-POST /auth/setup-organization
-```
-> 🔒 Auth required (cookies from verify-email step)
-
-**Request Body:**
-```json
-{
-  "organization_name": "Delhi Public School",
-  "organization_phone": "0112345678",
-  "organization_email": "info@dps.edu.in",
-  "organization_country": "India",
-  "organization_address": "Sector 45, Noida",
-  "organization_pincode": "201301",
-  "organization_website": "https://dps.edu.in",
-  "organization_whatsapp": "9876543210",
-  "organization_gstin": "29ABCDE1234F1Z5"
+export interface UpdateOrgPayload {
+  organization_name?: string;
+  organization_phone?: string;
+  organization_email?: string;
+  organization_country?: string;
+  organization_address?: string;
+  organization_pincode?: string;
+  organization_website?: string;
+  organization_whatsapp?: string;
+  organization_gstin?: string;
+  organization_upi_id?: string;
+  organization_logo?: string;
 }
-```
-> All fields except name, phone, email, country are optional.
 
-**Success Response `201`:**
-```json
-{
-  "success": true,
-  "message": "School setup complete! Welcome to your dashboard.",
-  "data": {
-    "organization": {
-      "_id": "66xyz...",
-      "organization_name": "Delhi Public School",
-      "organization_email": "info@dps.edu.in",
-      "organization_phone": "0112345678",
-      "organization_country": "India",
-      "organization_owner_id": "66abc123..."
-    },
-    "user": {
-      "_id": "66abc123...",
-      "user_name": "Rahul Sharma",
-      "user_email": "rahul@gmail.com",
-      "user_hasBusiness": true,
-      "user_organization_id": "66xyz...",
-      "role": {
-        "_id": "...",
-        "role_name": "ORGANIZATION_ADMIN",
-        "role_display_name": "Organization Admin",
-        "role_permissions": ["teacher:read", "teacher:write", "..."]
-      },
-      "organization": { "...full org object" }
-    }
-  }
+export interface BulkSubject {
+  subject_name: string;
+  subject_code: string;
+  subject_type?: "Theory" | "Practical" | "Both";
+  subject_full_marks?: number;
+  subject_pass_marks?: number;
 }
-```
-> New tokens issued with `organizationId` — frontend redirects to `/dashboard`
 
----
-
-### 4.5 Login
-```
-POST /auth/login
-```
-**Request Body:**
-```json
-{ "user_email": "rahul@gmail.com", "user_password": "Rahul@123" }
-```
-**Success Response `200`:**
-```json
-{
-  "success": true,
-  "message": "Login successful",
-  "data": {
-    "user": {
-      "_id": "66abc123...",
-      "user_name": "Rahul Sharma",
-      "user_email": "rahul@gmail.com",
-      "user_phone": "9876543210",
-      "user_country": "India",
-      "user_business_type": "School",
-      "user_isEmailVerified": true,
-      "user_isActive": true,
-      "user_hasBusiness": true,
-      "user_organization_id": "66xyz...",
-      "user_lastLogin": "2024-01-15T10:30:00.000Z",
-      "role": {
-        "_id": "...",
-        "role_name": "ORGANIZATION_ADMIN",
-        "role_display_name": "Organization Admin",
-        "role_permissions": ["teacher:read", "teacher:write", "..."]
-      },
-      "organization": {
-        "_id": "66xyz...",
-        "organization_name": "Delhi Public School",
-        "organization_logo": "https://cloudinary.com/..."
-      }
-    }
-  }
+export interface BulkClassInput {
+  class_name: string;
+  class_numeric?: number;
+  class_description?: string;
+  section_capacity?: number;
+  sections: string[];          // e.g. ["A", "B", "C"]
+  subjects: BulkSubject[];
 }
-```
-**Error Responses:**
-```json
-// 401
-{ "success": false, "message": "Invalid email or password" }
-// 403
-{ "success": false, "message": "Your account has been deactivated. Please contact support." }
-```
 
----
+export const organizationService = {
+  // My organization
+  getMyOrganization: () =>
+    api.get<ApiResponse<Organization>>("/organization/my-organization"),
 
-### 4.6 Logout
-```
-POST /auth/logout
-```
-> Clears `accessToken` and `refreshToken` cookies.
+  // Overview stats
+  getOverview: () =>
+    api.get<ApiResponse<any>>("/organization/overview"),
 
-**Response `200`:**
-```json
-{ "success": true, "message": "Logged out successfully" }
-```
+  // Full academic tree
+  getAcademicStructure: () =>
+    api.get<ApiResponse<any[]>>("/organization/academic-structure"),
 
----
+  // Bulk create classes + sections + subjects
+  bulkCreateStructure: (classes: BulkClassInput[]) =>
+    api.post<ApiResponse<any[]>>("/organization/academic-structure/bulk", { classes }),
 
-### 4.7 Forgot Password
-```
-POST /auth/forgot-password
-```
-**Request Body:**
-```json
-{ "user_email": "rahul@gmail.com" }
-```
-**Response `200`:**
-```json
-{ "success": true, "message": "If this email is registered, a reset link has been sent." }
-```
-> Always returns 200 — never reveals if email exists (security)
+  // All members
+  getMembers: (params?: { role_type?: "teacher" | "staff" | "student"; page?: number; limit?: number; search?: string }) =>
+    api.get<ApiResponse<any>>("/organization/members", { params }),
 
----
+  // Update org
+  updateOrganization: (data: UpdateOrgPayload) =>
+    api.patch<ApiResponse<Organization>>("/organization/update", data),
 
-### 4.8 Reset Password
-```
-POST /auth/reset-password
-```
-**Request Body:**
-```json
-{ "token": "TOKEN_FROM_EMAIL_LINK", "password": "NewPass@456" }
-```
-**Success `200`:**
-```json
-{ "success": true, "message": "Password updated successfully. You can now login." }
-```
-**Error `400`:**
-```json
-{ "success": false, "message": "Reset link is invalid or has expired. Please request a new one." }
-```
-
----
-
-### 4.9 Change Password (logged-in user)
-```
-POST /auth/change-password
-```
-> 🔒 Auth required
-
-**Request Body:**
-```json
-{ "current_password": "OldPass@123", "new_password": "NewPass@456" }
-```
-**Success `200`:**
-```json
-{ "success": true, "message": "Password changed successfully. Please login again." }
-```
-> Session cleared — user must re-login.
-
----
-
-### 4.10 Get My Profile
-```
-GET /user/my-info
-```
-> 🔒 Auth required
-
-**Response `200`:**
-```json
-{
-  "success": true,
-  "data": {
-    "user": { "...full user object without password" },
-    "organization": { "...org details or {}" },
-    "role": { "...role with permissions or {}" }
-  }
-}
-```
-
----
-
-## 5. Organization APIs
-
-> 🔒 All routes require Auth
-
-### 5.1 Get My Organization
-```
-GET /organization/organization/:id
-```
-**Response `200`:**
-```json
-{
-  "success": true,
-  "data": {
-    "_id": "66xyz...",
-    "organization_name": "Delhi Public School",
-    "organization_email": "info@dps.edu.in",
-    "organization_phone": "0112345678",
-    "organization_whatsapp": "9876543210",
-    "organization_website": "https://dps.edu.in",
-    "organization_country": "India",
-    "organization_address": "Sector 45, Noida",
-    "organization_pincode": "201301",
-    "organization_gstin": "29ABCDE1234F1Z5",
-    "organization_logo": "https://res.cloudinary.com/...",
-    "owner": {
-      "_id": "...",
-      "user_name": "Rahul Sharma",
-      "user_email": "rahul@gmail.com"
-    },
-    "createdAt": "2024-01-10T08:00:00.000Z"
-  }
-}
-```
-
-### 5.2 Update Organization
-```
-PATCH /organization/update
-```
-**Request Body (all optional):**
-```json
-{
-  "organization_name": "Delhi Public School - Main Branch",
-  "organization_phone": "0119876543",
-  "organization_address": "Block A, Sector 45, Noida",
-  "organization_website": "https://dps.edu.in",
-  "organization_upi_id": "dps@okaxis"
-}
-```
-
-### 5.3 Upload Organization Logo
-```
-POST /organization/logo
-Content-Type: multipart/form-data
-```
-**Form Data:**
-```
-logo: <File>   (max 5MB, image/*)
-```
-**Response `200`:**
-```json
-{
-  "success": true,
-  "data": {
-    "url": "https://res.cloudinary.com/your_cloud/image/upload/v123/organizations/abc.jpg",
-    "public_id": "organizations/abc"
-  }
-}
-```
-> After getting `url`, call `PATCH /organization/update` with `{ organization_logo: url }`
-
----
-
-## 6. Class, Section, Subject APIs
-
-> 🔒 All routes require Auth  
-> All data auto-scoped to logged-in user's organization
-
-### 6.1 Classes
-
-#### Create Class
-```
-POST /class/create
-```
-```json
-{
-  "class_name": "Class 10",
-  "class_numeric": 10,
-  "class_description": "Secondary class"
-}
-```
-
-#### List Classes
-```
-GET /class/list?page=1&limit=50&search=10
-```
-**Response:**
-```json
-{
-  "success": true,
-  "data": [
-    { "_id": "...", "class_name": "Class 10", "class_numeric": 10, "class_status": true }
-  ],
-  "pagination": { "page": 1, "limit": 50, "total": 12, "totalPages": 1 }
-}
-```
-
-#### Update / Delete
-```
-PATCH /class/update/:id   Body: { "class_name": "Class X" }
-DELETE /class/delete/:id
-```
-
----
-
-### 6.2 Sections
-
-#### Create Section
-```
-POST /section/create
-```
-```json
-{
-  "class_id": "66abc...",
-  "section_name": "A",
-  "section_capacity": 40,
-  "section_class_teacher_id": "66teacher..."
-}
-```
-
-#### List Sections (filter by class)
-```
-GET /section/list?class_id=66abc...&page=1&limit=20
-```
-**Response includes populated class and teacher:**
-```json
-{
-  "data": [
-    {
-      "_id": "...",
-      "section_name": "A",
-      "section_capacity": 40,
-      "class_id": { "_id": "...", "class_name": "Class 10" },
-      "section_class_teacher_id": { "_id": "...", "teacher_name": "Amit Sir" }
-    }
-  ]
-}
-```
-
----
-
-### 6.3 Subjects
-
-#### Create Subject
-```
-POST /subject/create
-```
-```json
-{
-  "class_id": "66abc...",
-  "subject_name": "Mathematics",
-  "subject_code": "MATH-10",
-  "subject_type": "Theory",
-  "subject_teacher_id": "66teacher...",
-  "subject_full_marks": 100,
-  "subject_pass_marks": 33
-}
-```
-> `subject_type` enum: `"Theory" | "Practical" | "Both"`
-
-#### List Subjects (filter by class)
-```
-GET /subject/list?class_id=66abc...&search=math
-```
-
----
-
-## 7. Teacher APIs
-
-> 🔒 All routes require Auth
-
-### 7.1 Create Teacher
-```
-POST /teacher/create
-```
-> Auto-creates a user account with login credentials. Credentials returned in response.
-
-**Request Body:**
-```json
-{
-  "teacher_name": "Amit Kumar",
-  "teacher_email": "amit.kumar@dps.edu.in",
-  "teacher_phone": "9876543210",
-  "teacher_gender": "Male",
-  "teacher_qualification": "M.Sc Mathematics",
-  "teacher_experience": 5,
-  "teacher_joining_date": "2024-01-01",
-  "teacher_salary": 45000,
-  "teacher_address": "Noida, UP",
-  "teacher_dob": "1990-05-15",
-  "teacher_country": "India"
-}
-```
-> `teacher_gender` enum: `"Male" | "Female" | "Other"`
-
-**Success Response `201`:**
-```json
-{
-  "success": true,
-  "message": "Teacher created successfully",
-  "data": {
-    "_id": "66tch...",
-    "teacher_employee_id": "DPS-TCH-0001",
-    "teacher_name": "Amit Kumar",
-    "teacher_email": "amit.kumar@dps.edu.in",
-    "teacher_status": true
+  // Upload logo
+  uploadLogo: (file: File) => {
+    const form = new FormData();
+    form.append("logo", file);
+    return api.post<ApiResponse<{ url: string; public_id: string }>>("/organization/logo", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
   },
-  "credentials": {
-    "email": "amit.kumar@dps.edu.in",
-    "password": "Teacher@4521"
-  }
-}
-```
-> ⚠️ Show credentials to admin once — store or share with teacher manually.
 
----
-
-### 7.2 List Teachers
-```
-GET /teacher/list?page=1&pageSize=10&search=amit
+  // Get org by ID
+  getById: (id: string) =>
+    api.get<ApiResponse<Organization>>(`/organization/organization/${id}`),
+};
 ```
 
 ---
 
-### 7.3 Get Teacher by ID
-```
-GET /teacher/:id
-```
-**Response includes user + role info:**
-```json
-{
-  "data": {
-    "_id": "...",
-    "teacher_employee_id": "DPS-TCH-0001",
-    "teacher_name": "Amit Kumar",
-    "teacher_email": "amit.kumar@dps.edu.in",
-    "teacher_phone": "9876543210",
-    "teacher_gender": "Male",
-    "teacher_joining_date": "2024-01-01T00:00:00.000Z",
-    "teacher_salary": 45000,
-    "teacher_status": true,
-    "user": { "_id": "...", "user_isActive": true, "user_lastLogin": "..." },
-    "role": { "role_name": "TEACHER", "role_display_name": "Teacher" }
-  }
+## 6. Academic Services
+
+### `src/services/class.service.ts`
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export interface ClassData {
+  _id: string;
+  class_name: string;
+  class_numeric?: number;
+  class_description?: string;
+  class_status: boolean;
+  sections?: any[];
+  subjects?: any[];
+  student_count?: number;
+  section_count?: number;
+  subject_count?: number;
 }
+
+export const classService = {
+  create: (data: { class_name: string; class_numeric?: number; class_description?: string }) =>
+    api.post<ApiResponse<ClassData>>("/class/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<ClassData>>("/class/list", { params }),
+
+  // Returns class + sections + subjects + student count
+  getById: (id: string) =>
+    api.get<ApiResponse<ClassData>>(`/class/${id}`),
+
+  // Students of a class
+  getStudents: (classId: string, params?: { section_id?: string; page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<any>>(`/class/${classId}/students`, { params }),
+
+  update: (id: string, data: Partial<{ class_name: string; class_numeric: number; class_description: string; class_status: boolean }>) =>
+    api.patch<ApiResponse<ClassData>>(`/class/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/class/delete/${id}`),
+};
 ```
+
+### `src/services/section.service.ts`
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export const sectionService = {
+  create: (data: { class_id: string; section_name: string; section_capacity?: number; section_class_teacher_id?: string }) =>
+    api.post<ApiResponse<any>>("/section/create", data),
+
+  list: (params?: { class_id?: string; page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<any>>("/section/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/section/${id}`),
+
+  update: (id: string, data: any) =>
+    api.patch<ApiResponse<any>>(`/section/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/section/delete/${id}`),
+};
+```
+
+### `src/services/subject.service.ts`
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export interface CreateSubjectPayload {
+  class_id: string;
+  subject_name: string;
+  subject_code: string;
+  subject_type?: "Theory" | "Practical" | "Both";
+  subject_teacher_id?: string;
+  subject_full_marks?: number;
+  subject_pass_marks?: number;
+}
+
+export const subjectService = {
+  create: (data: CreateSubjectPayload) =>
+    api.post<ApiResponse<any>>("/subject/create", data),
+
+  list: (params?: { class_id?: string; page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<any>>("/subject/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/subject/${id}`),
+
+  update: (id: string, data: Partial<CreateSubjectPayload>) =>
+    api.patch<ApiResponse<any>>(`/subject/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/subject/delete/${id}`),
+};
+```
+
 
 ---
 
-### 7.4 Update Teacher
-```
-PATCH /teacher/update/:id
-```
-```json
-{
-  "teacher_phone": "9999999999",
-  "teacher_salary": 50000,
-  "teacher_address": "Delhi"
+## 7. Teacher Service — `src/services/teacher.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, Gender } from "../types";
+
+export interface CreateTeacherPayload {
+  teacher_name: string;
+  teacher_email: string;
+  teacher_phone: string;
+  teacher_gender?: Gender;
+  teacher_qualification?: string;
+  teacher_experience?: number;
+  teacher_joining_date?: string;  // "YYYY-MM-DD"
+  teacher_salary?: number;
+  teacher_address?: string;
+  teacher_dob?: string;
+  teacher_country?: string;
+  teacher_photo?: string;
 }
-```
 
-### 7.5 Toggle Status
-```
-PATCH /teacher/status/:id
-```
-> No body needed. Toggles active/inactive.
-
-**Response:**
-```json
-{ "data": { "teacher_status": false } }
-```
-
-### 7.6 Upload Teacher Photo
-```
-POST /teacher/add-image
-Content-Type: multipart/form-data
-```
-```
-image: <File>
-```
-**Response:**
-```json
-{ "data": { "url": "https://res.cloudinary.com/...", "public_id": "teacher/abc" } }
-```
-> Then call `PATCH /teacher/update/:id` with `{ "teacher_photo": url }`
-
----
-
-## 8. Student APIs
-
-> 🔒 All routes require Auth
-
-### 8.1 Create Student (Admission)
-```
-POST /student/create
-```
-> Auto-creates user + login credentials. Auto-generates admission number.
-
-**Request Body:**
-```json
-{
-  "student_name": "Priya Verma",
-  "student_email": "priya.verma@dps.edu.in",
-  "student_phone": "9876500001",
-  "student_gender": "Female",
-  "student_dob": "2010-03-15",
-  "student_blood_group": "O+",
-  "student_religion": "Hindu",
-  "student_category": "General",
-  "student_address": "B-12, Sector 45",
-  "student_city": "Noida",
-  "student_state": "Uttar Pradesh",
-  "student_pincode": "201301",
-  "student_class_id": "66cls...",
-  "student_section_id": "66sec...",
-  "student_session": "2024-25",
-  "student_admission_date": "2024-04-01",
-  "father_name": "Rajesh Verma",
-  "father_phone": "9876500000",
-  "father_occupation": "Engineer",
-  "mother_name": "Sunita Verma",
-  "mother_phone": "9876500002",
-  "mother_occupation": "Teacher",
-  "guardian_name": "",
-  "guardian_phone": "",
-  "guardian_relation": ""
+export interface Teacher {
+  _id: string;
+  teacher_employee_id: string;
+  teacher_name: string;
+  teacher_email: string;
+  teacher_phone: string;
+  teacher_gender?: Gender;
+  teacher_qualification?: string;
+  teacher_experience?: number;
+  teacher_salary?: number;
+  teacher_photo?: string;
+  teacher_status: boolean;
+  organization_id: string;
+  user_id: string;
 }
-```
-> `student_gender` enum: `"Male" | "Female" | "Other"`
 
-**Success Response `201`:**
-```json
-{
-  "success": true,
-  "data": {
-    "_id": "66stu...",
-    "student_admission_no": "DPS-STU-240001",
-    "student_name": "Priya Verma",
-    "student_class_id": "66cls...",
-    "student_status": true
+export const teacherService = {
+  // Returns teacher data + credentials: { email, password }
+  create: (data: CreateTeacherPayload) =>
+    api.post<ApiResponse<{ data: Teacher; credentials: { email: string; password: string } }>>("/teacher/create", data),
+
+  // ⚠️ Uses pageSize not limit
+  list: (params?: { page?: number; pageSize?: number; search?: string }) =>
+    api.get<PaginatedResponse<Teacher>>("/teacher/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<Teacher & { user: any; role: any }>>(`/teacher/${id}`),
+
+  update: (id: string, data: Partial<CreateTeacherPayload>) =>
+    api.patch<ApiResponse<Teacher>>(`/teacher/update/${id}`, data),
+
+  toggleStatus: (id: string) =>
+    api.patch<ApiResponse<{ teacher_id: string; teacher_status: boolean }>>(`/teacher/status/${id}`),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/teacher/delete/${id}`),
+
+  uploadPhoto: (file: File) => {
+    const form = new FormData();
+    form.append("image", file);
+    return api.post<ApiResponse<{ url: string; public_id: string }>>("/teacher/add-image", form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
   },
-  "credentials": {
-    "email": "priya.verma@dps.edu.in",
-    "password": "Student@3842"
-  }
+};
+```
+
+---
+
+## 8. Student Service — `src/services/student.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, Gender } from "../types";
+
+export interface CreateStudentPayload {
+  student_name: string;         // required
+  student_email: string;        // required
+  student_phone: string;        // required
+  student_gender: Gender;       // required
+  student_dob: string;          // required "YYYY-MM-DD"
+  student_blood_group?: string;
+  student_religion?: string;
+  student_category?: string;
+  student_address?: string;
+  student_city?: string;
+  student_state?: string;
+  student_pincode?: string;
+  student_class_id?: string;
+  student_section_id?: string;
+  student_session?: string;
+  student_admission_date?: string;
+  student_country?: string;
+  father_name?: string;
+  father_phone?: string;
+  father_occupation?: string;
+  mother_name?: string;
+  mother_phone?: string;
+  mother_occupation?: string;
+  guardian_name?: string;
+  guardian_phone?: string;
+  guardian_relation?: string;
 }
-```
 
----
-
-### 8.2 List Students
-```
-GET /student/list?page=1&limit=20&class_id=66cls...&section_id=66sec...&status=true&search=priya
-```
-**Response includes populated class + section:**
-```json
-{
-  "data": [
-    {
-      "_id": "...",
-      "student_admission_no": "DPS-STU-240001",
-      "student_name": "Priya Verma",
-      "student_gender": "Female",
-      "student_status": true,
-      "student_class_id": { "class_name": "Class 10", "class_numeric": 10 },
-      "student_section_id": { "section_name": "A" }
-    }
-  ],
-  "pagination": { "page": 1, "limit": 20, "total": 85, "totalPages": 5 }
+export interface Student {
+  _id: string;
+  student_admission_no: string;
+  student_name: string;
+  student_email: string;
+  student_phone: string;
+  student_gender: Gender;
+  student_dob: string;
+  student_status: boolean;
+  student_class_id?: any;
+  student_section_id?: any;
+  student_session?: string;
+  student_photo?: string;
 }
+
+export const studentService = {
+  create: (data: CreateStudentPayload) =>
+    api.post<ApiResponse<{ data: Student; credentials: { email: string; password: string } }>>("/student/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; class_id?: string; section_id?: string; status?: boolean }) =>
+    api.get<PaginatedResponse<Student>>("/student/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<Student>>(`/student/${id}`),
+
+  update: (id: string, data: Partial<CreateStudentPayload>) =>
+    api.patch<ApiResponse<Student>>(`/student/update/${id}`, data),
+
+  toggleStatus: (id: string) =>
+    api.patch<ApiResponse<{ student_status: boolean }>>(`/student/status/${id}`),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/student/delete/${id}`),
+};
 ```
 
 ---
 
-### 8.3 Get Student by ID
-```
-GET /student/:id
-```
+## 9. Staff Service — `src/services/staff.service.ts`
 
-### 8.4 Update Student
-```
-PATCH /student/update/:id
-```
-> Send only fields you want to update.
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, Gender } from "../types";
 
-### 8.5 Toggle Status
-```
-PATCH /student/status/:id
-```
-
----
-
-## 9. Staff APIs
-
-> Same pattern as Teacher. 🔒 Auth required.
-
-### Create Staff
-```
-POST /staff/create
-```
-```json
-{
-  "staff_name": "Vikram Singh",
-  "staff_email": "vikram@dps.edu.in",
-  "staff_phone": "9876540001",
-  "staff_gender": "Male",
-  "staff_department": "Administration",
-  "staff_designation": "Office Manager",
-  "staff_qualification": "B.Com",
-  "staff_experience": 3,
-  "staff_joining_date": "2024-02-01",
-  "staff_salary": 25000,
-  "staff_address": "Delhi"
+export interface CreateStaffPayload {
+  staff_name: string;
+  staff_email: string;
+  staff_phone: string;
+  staff_gender?: Gender;
+  staff_dob?: string;
+  staff_department?: string;
+  staff_designation?: string;
+  staff_qualification?: string;
+  staff_experience?: number;
+  staff_joining_date?: string;
+  staff_salary?: number;
+  staff_address?: string;
+  staff_country?: string;
 }
-```
-> Auto-creates user with role `STAFF`. Returns credentials.
 
-### Other Endpoints
-```
-GET    /staff/list?page=1&limit=10&department=Administration
-GET    /staff/:id
-PATCH  /staff/update/:id
-PATCH  /staff/status/:id    ← toggle active/inactive
-DELETE /staff/delete/:id    ← soft delete
+export const staffService = {
+  create: (data: CreateStaffPayload) =>
+    api.post<ApiResponse<{ data: any; credentials: { email: string; password: string } }>>("/staff/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; department?: string }) =>
+    api.get<PaginatedResponse<any>>("/staff/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/staff/${id}`),
+
+  update: (id: string, data: Partial<CreateStaffPayload>) =>
+    api.patch<ApiResponse<any>>(`/staff/update/${id}`, data),
+
+  toggleStatus: (id: string) =>
+    api.patch<ApiResponse<any>>(`/staff/status/${id}`),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/staff/delete/${id}`),
+};
 ```
 
 ---
 
-## 10. Attendance APIs
+## 10. Attendance Service — `src/services/attendance.service.ts`
 
-> 🔒 Auth required
+```typescript
+import api from "../lib/api";
+import { ApiResponse, AttendanceStatus } from "../types";
 
-### 10.1 Mark Attendance (Bulk)
-```
-POST /attendance/mark
-```
-**Request Body:**
-```json
-{
-  "class_id": "66cls...",
-  "section_id": "66sec...",
-  "attendance_date": "2024-01-15",
-  "attendance_records": [
-    { "student_id": "66stu001...", "status": "Present", "remark": "" },
-    { "student_id": "66stu002...", "status": "Absent",  "remark": "Sick" },
-    { "student_id": "66stu003...", "status": "Late",    "remark": "Bus delay" },
-    { "student_id": "66stu004...", "status": "Leave",   "remark": "Approved leave" }
-  ]
+export interface AttendanceRecord {
+  student_id: string;
+  status: AttendanceStatus;
+  remark?: string;
 }
-```
-> `status` enum: `"Present" | "Absent" | "Late" | "Leave"`  
-> Uses upsert — calling again on same date overwrites.
 
-**Response `200`:**
-```json
-{ "success": true, "message": "Attendance marked successfully" }
+export const attendanceService = {
+  // Bulk mark — upsert (calling again on same date overwrites)
+  mark: (data: { class_id: string; section_id: string; attendance_date: string; attendance_records: AttendanceRecord[] }) =>
+    api.post<ApiResponse<null>>("/attendance/mark", data),
+
+  // Get by date (class_id + date required)
+  getByDate: (params: { class_id: string; date: string; section_id?: string }) =>
+    api.get<ApiResponse<any[]>>("/attendance/by-date", { params }),
+
+  // Student monthly
+  getStudentAttendance: (studentId: string, params?: { month?: number; year?: number }) =>
+    api.get<ApiResponse<any>>(`/attendance/student/${studentId}`, { params }),
+
+  // Class summary
+  getClassSummary: (params: { class_id: string; section_id?: string; month?: number; year?: number }) =>
+    api.get<ApiResponse<any[]>>("/attendance/class-summary", { params }),
+};
 ```
 
 ---
 
-### 10.2 Get Attendance by Date
-```
-GET /attendance/by-date?class_id=66cls...&section_id=66sec...&date=2024-01-15
-```
-**Response:**
-```json
-{
-  "data": [
-    {
-      "_id": "...",
-      "attendance_date": "2024-01-15T00:00:00.000Z",
-      "attendance_status": "Present",
-      "student_id": {
-        "_id": "66stu001...",
-        "student_name": "Priya Verma",
-        "student_admission_no": "DPS-STU-240001",
-        "student_photo": "https://..."
-      }
-    }
-  ]
+## 11. Exam & Marks Service — `src/services/exam.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, ExamStatus } from "../types";
+
+export interface CreateExamPayload {
+  class_id: string;
+  exam_name: string;
+  exam_term?: string;
+  exam_session?: string;
+  exam_start_date: string;
+  exam_end_date: string;
+  exam_description?: string;
+  exam_status?: ExamStatus;
 }
-```
 
----
-
-### 10.3 Student Attendance History
-```
-GET /attendance/student/:student_id?month=1&year=2024
-```
-**Response:**
-```json
-{
-  "data": [ { "attendance_date": "...", "attendance_status": "Present" } ],
-  "summary": {
-    "total": 22, "present": 20, "absent": 1, "late": 1, "leave": 0
-  }
+export interface MarkEntry {
+  student_id: string;
+  mark_obtained: number;
+  mark_full: number;
+  mark_pass: number;
+  mark_remark?: string;
 }
+
+export const examService = {
+  create: (data: CreateExamPayload) => api.post<ApiResponse<any>>("/exam/create", data),
+  list: (params?: { page?: number; limit?: number; search?: string; class_id?: string; status?: ExamStatus }) =>
+    api.get<PaginatedResponse<any>>("/exam/list", { params }),
+  getById: (id: string) => api.get<ApiResponse<any>>(`/exam/${id}`),
+  update: (id: string, data: Partial<CreateExamPayload>) => api.patch<ApiResponse<any>>(`/exam/update/${id}`, data),
+  delete: (id: string) => api.delete<ApiResponse<null>>(`/exam/delete/${id}`),
+};
+
+export const markService = {
+  // Bulk enter marks for one subject
+  enter: (data: { exam_id: string; subject_id: string; class_id: string; marks: MarkEntry[] }) =>
+    api.post<ApiResponse<null>>("/mark/enter", data),
+
+  getByExam: (params: { exam_id?: string; subject_id?: string; class_id?: string }) =>
+    api.get<ApiResponse<any[]>>("/mark/by-exam", { params }),
+
+  getStudentMarks: (studentId: string, examId?: string) =>
+    api.get<ApiResponse<any[]>>(`/mark/student/${studentId}`, { params: examId ? { exam_id: examId } : {} }),
+
+  // Full result card with grade + pass/fail
+  getResultCard: (studentId: string, examId: string) =>
+    api.get<ApiResponse<{ marks: any[]; summary: { total_obtained: number; total_full: number; percentage: string; overall_grade: string; result: string } }>>(`/mark/result/${studentId}/${examId}`),
+
+  update: (id: string, data: { mark_obtained: number; mark_full: number; mark_remark?: string }) =>
+    api.patch<ApiResponse<any>>(`/mark/update/${id}`, data),
+};
 ```
+
 
 ---
 
-### 10.4 Class Attendance Summary
-```
-GET /attendance/class-summary?class_id=66cls...&section_id=66sec...&month=1&year=2024
-```
-**Response:**
-```json
-{
-  "data": [
-    {
-      "_id": "66stu001...",
-      "student_name": "Priya Verma",
-      "student_admission_no": "DPS-STU-240001",
-      "total": 22, "present": 20, "absent": 2, "late": 0,
-      "percentage": 90.91
-    }
-  ]
+## 12. Fee Service — `src/services/fee.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, FeeFrequency, PaymentMode } from "../types";
+
+export interface CreateFeeStructurePayload {
+  class_id: string;
+  fee_title: string;
+  fee_description?: string;
+  fee_amount: number;
+  fee_frequency: FeeFrequency;
+  fee_due_day?: number;
+  fee_session?: string;
 }
-```
 
----
-
-## 11. Exam & Marks APIs
-
-> 🔒 Auth required
-
-### 11.1 Create Exam
-```
-POST /exam/create
-```
-```json
-{
-  "class_id": "66cls...",
-  "exam_name": "Half Yearly Exam",
-  "exam_term": "Term 1",
-  "exam_session": "2024-25",
-  "exam_start_date": "2024-09-01",
-  "exam_end_date": "2024-09-10",
-  "exam_description": "First half yearly examination"
+export interface CollectFeePayload {
+  student_id: string;
+  fee_structure_id: string;
+  collection_amount_paid: number;
+  collection_discount?: number;
+  collection_fine?: number;
+  collection_balance?: number;
+  collection_payment_mode: PaymentMode;
+  collection_month?: string;
+  collection_payment_date?: string;
+  collection_remarks?: string;
 }
-```
-> `exam_status` default: `"Upcoming"`. Enum: `"Upcoming" | "Ongoing" | "Completed" | "Cancelled"`
 
-### 11.2 List Exams
-```
-GET /exam/list?class_id=66cls...&status=Upcoming&page=1&limit=10
+export const feeService = {
+  createStructure: (data: CreateFeeStructurePayload) =>
+    api.post<ApiResponse<any>>("/fee/structure/create", data),
+
+  listStructures: (params?: { class_id?: string; page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<any>>("/fee/structure/list", { params }),
+
+  collect: (data: CollectFeePayload) =>
+    api.post<ApiResponse<any>>("/fee/collect", data),
+
+  getAllCollections: (params?: { page?: number; limit?: number; start_date?: string; end_date?: string }) =>
+    api.get<PaginatedResponse<any>>("/fee/collections", { params }),
+
+  getStudentFeeHistory: (studentId: string) =>
+    api.get<ApiResponse<{ data: any[]; summary: { total_paid: number; total_fine: number } }>>(`/fee/student/${studentId}`),
+
+  getStats: (params?: { month?: number; year?: number }) =>
+    api.get<ApiResponse<{ total_collected: number; total_fine: number; total_discount: number; count: number }>>("/fee/stats", { params }),
+};
 ```
 
 ---
 
-### 11.3 Enter Marks (Bulk Upsert)
-```
-POST /mark/enter
-```
-**Request Body:**
-```json
-{
-  "exam_id": "66exam...",
-  "subject_id": "66sub...",
-  "class_id": "66cls...",
-  "marks": [
-    { "student_id": "66stu001...", "mark_obtained": 85, "mark_full": 100, "mark_pass": 33 },
-    { "student_id": "66stu002...", "mark_obtained": 42, "mark_full": 100, "mark_pass": 33 },
-    { "student_id": "66stu003...", "mark_obtained": 30, "mark_full": 100, "mark_pass": 33, "mark_remark": "Needs improvement" }
-  ]
+## 13. Timetable Service — `src/services/timetable.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, WeekDay } from "../types";
+
+export interface CreateSlotPayload {
+  class_id: string;
+  section_id: string;
+  subject_id: string;
+  teacher_id: string;
+  timetable_day: WeekDay;
+  timetable_start_time: string;  // "08:00"
+  timetable_end_time: string;    // "08:45"
+  timetable_period_no?: number;
+  timetable_room?: string;
+  timetable_session?: string;
 }
-```
-> Grade auto-calculated server-side (A+, A, B+, B, C+, C, D, F)
 
-**Response `200`:**
-```json
-{ "success": true, "message": "Marks saved successfully" }
+export const timetableService = {
+  create: (data: CreateSlotPayload) =>
+    api.post<ApiResponse<any>>("/timetable/create", data),
+
+  // grouped response: { data: [], grouped: { Monday: [], Tuesday: [] } }
+  get: (params?: { class_id?: string; section_id?: string; teacher_id?: string; day?: WeekDay }) =>
+    api.get<ApiResponse<{ data: any[]; grouped: Record<WeekDay, any[]> }>>("/timetable/", { params }),
+
+  update: (id: string, data: Partial<CreateSlotPayload>) =>
+    api.patch<ApiResponse<any>>(`/timetable/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/timetable/delete/${id}`),
+};
 ```
 
 ---
 
-### 11.4 Get Result Card
+## 14. Homework Service — `src/services/homework.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export interface CreateHomeworkPayload {
+  class_id: string;
+  section_id?: string;
+  subject_id: string;
+  teacher_id: string;
+  homework_title: string;
+  homework_description?: string;
+  homework_submission_date: string;  // "YYYY-MM-DD"
+  homework_attachments?: string[];
+}
+
+export const homeworkService = {
+  create: (data: CreateHomeworkPayload) =>
+    api.post<ApiResponse<any>>("/homework/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; class_id?: string; section_id?: string; subject_id?: string }) =>
+    api.get<PaginatedResponse<any>>("/homework/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/homework/${id}`),
+
+  update: (id: string, data: Partial<CreateHomeworkPayload>) =>
+    api.patch<ApiResponse<any>>(`/homework/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/homework/delete/${id}`),
+};
 ```
-GET /mark/result/:student_id/:exam_id
+
+---
+
+## 15. Announcement & Event Services
+
+### `src/services/announcement.service.ts`
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, AnnouncementTarget } from "../types";
+
+export interface CreateAnnouncementPayload {
+  announcement_title: string;
+  announcement_content: string;
+  announcement_target: AnnouncementTarget;
+  announcement_class_ids?: string[];
+  announcement_attachments?: string[];
+  announcement_publish_date?: string;
+  announcement_expiry_date?: string;
+  announcement_is_published?: boolean;
+}
+
+export const announcementService = {
+  create: (data: CreateAnnouncementPayload) =>
+    api.post<ApiResponse<any>>("/announcement/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; target?: AnnouncementTarget }) =>
+    api.get<PaginatedResponse<any>>("/announcement/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/announcement/${id}`),
+
+  update: (id: string, data: Partial<CreateAnnouncementPayload>) =>
+    api.patch<ApiResponse<any>>(`/announcement/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/announcement/delete/${id}`),
+};
 ```
-**Response:**
-```json
-{
-  "data": {
-    "marks": [
-      {
-        "subject_id": { "subject_name": "Mathematics", "subject_code": "MATH-10" },
-        "mark_obtained": 85, "mark_full": 100, "mark_pass": 33,
-        "mark_grade": "A", "mark_remark": ""
-      },
-      {
-        "subject_id": { "subject_name": "Science" },
-        "mark_obtained": 92, "mark_full": 100, "mark_pass": 33,
-        "mark_grade": "A+"
-      }
+
+### `src/services/event.service.ts`
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, ExamStatus } from "../types";
+
+export interface CreateEventPayload {
+  event_title: string;
+  event_description?: string;
+  event_type?: string;
+  event_start_date: string;
+  event_end_date?: string;
+  event_venue?: string;
+  event_attachments?: string[];
+  event_status?: "Upcoming" | "Ongoing" | "Completed" | "Cancelled";
+}
+
+export const eventService = {
+  create: (data: CreateEventPayload) =>
+    api.post<ApiResponse<any>>("/event/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; status?: string }) =>
+    api.get<PaginatedResponse<any>>("/event/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/event/${id}`),
+
+  update: (id: string, data: Partial<CreateEventPayload>) =>
+    api.patch<ApiResponse<any>>(`/event/update/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/event/delete/${id}`),
+};
+```
+
+---
+
+## 16. Leave Service — `src/services/leave.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, LeaveType, LeaveStatus } from "../types";
+
+export interface ApplyLeavePayload {
+  leave_type: LeaveType;
+  leave_from_date: string;  // "YYYY-MM-DD"
+  leave_to_date: string;    // "YYYY-MM-DD"
+  leave_reason: string;
+  leave_document?: string;
+}
+
+export const leaveService = {
+  apply: (data: ApplyLeavePayload) =>
+    api.post<ApiResponse<any>>("/leave/apply", data),
+
+  list: (params?: { page?: number; limit?: number; status?: LeaveStatus }) =>
+    api.get<PaginatedResponse<any>>("/leave/list", { params }),
+
+  getMyLeaves: () =>
+    api.get<ApiResponse<any[]>>("/leave/my-leaves"),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/leave/${id}`),
+
+  // action: "Approved" | "Rejected"
+  action: (id: string, action: "Approved" | "Rejected", rejection_reason?: string) =>
+    api.patch<ApiResponse<any>>(`/leave/action/${id}`, { action, rejection_reason }),
+};
+```
+
+---
+
+## 17. Salary Service — `src/services/salary.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, EmployeeType } from "../types";
+
+export interface GenerateSalaryPayload {
+  employee_id: string;
+  employee_type: EmployeeType;
+  salary_month: string;      // "YYYY-MM" e.g. "2024-01"
+  salary_basic: number;
+  salary_allowances?: number;
+  salary_deductions?: number;
+  salary_bonus?: number;
+  salary_fine?: number;
+}
+
+export const salaryService = {
+  generate: (data: GenerateSalaryPayload) =>
+    api.post<ApiResponse<any>>("/salary/generate", data),
+
+  list: (params?: { page?: number; limit?: number; salary_month?: string; employee_type?: EmployeeType; status?: "Pending" | "Paid" }) =>
+    api.get<PaginatedResponse<any>>("/salary/list", { params }),
+
+  getEmployeeHistory: (employeeId: string) =>
+    api.get<ApiResponse<any[]>>(`/salary/employee/${employeeId}`),
+
+  pay: (id: string, data?: { salary_payment_mode?: "Cash" | "Bank Transfer" | "Cheque"; salary_remark?: string }) =>
+    api.patch<ApiResponse<any>>(`/salary/pay/${id}`, data || {}),
+};
+```
+
+
+---
+
+## 18. Library Service — `src/services/library.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, MemberType } from "../types";
+
+export interface CreateBookPayload {
+  book_title: string;
+  book_author?: string;
+  book_publisher?: string;
+  book_isbn?: string;
+  book_category?: string;
+  book_subject?: string;
+  book_edition?: string;
+  book_language?: string;
+  book_total_copies: number;
+  book_available_copies: number;
+  book_price?: number;
+  book_rack_no?: string;
+}
+
+export const libraryService = {
+  createBook: (data: CreateBookPayload) =>
+    api.post<ApiResponse<any>>("/library/book/create", data),
+
+  listBooks: (params?: { page?: number; limit?: number; search?: string; category?: string }) =>
+    api.get<PaginatedResponse<any>>("/library/book/list", { params }),
+
+  getBook: (id: string) =>
+    api.get<ApiResponse<any>>(`/library/book/${id}`),
+
+  updateBook: (id: string, data: Partial<CreateBookPayload>) =>
+    api.patch<ApiResponse<any>>(`/library/book/update/${id}`, data),
+
+  deleteBook: (id: string) =>
+    api.delete<ApiResponse<null>>(`/library/book/delete/${id}`),
+
+  issueBook: (data: { book_id: string; member_id: string; member_type: MemberType; due_date: string }) =>
+    api.post<ApiResponse<any>>("/library/issue", data),
+
+  returnBook: (issueId: string, fine_per_day?: number) =>
+    api.patch<ApiResponse<any>>(`/library/return/${issueId}`, { fine_per_day }),
+
+  getIssues: (params?: { page?: number; limit?: number; status?: "Issued" | "Returned" | "Overdue" }) =>
+    api.get<PaginatedResponse<any>>("/library/issues", { params }),
+};
+```
+
+---
+
+## 19. Hostel Service — `src/services/hostel.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, HostelType, RoomType } from "../types";
+
+export const hostelService = {
+  create: (data: { hostel_name: string; hostel_type: HostelType; hostel_capacity?: number; hostel_address?: string; hostel_warden_name?: string; hostel_warden_phone?: string }) =>
+    api.post<ApiResponse<any>>("/hostel/create", data),
+
+  list: (params?: { page?: number; limit?: number }) =>
+    api.get<PaginatedResponse<any>>("/hostel/list", { params }),
+
+  createRoom: (data: { hostel_id: string; room_no: string; room_type: RoomType; room_capacity: number; room_cost_per_month?: number }) =>
+    api.post<ApiResponse<any>>("/hostel/room/create", data),
+
+  getRooms: (hostelId: string) =>
+    api.get<ApiResponse<any[]>>(`/hostel/room/${hostelId}`),
+
+  allotRoom: (data: { hostel_id: string; room_id: string; student_id: string; allotment_date?: string }) =>
+    api.post<ApiResponse<any>>("/hostel/allot", data),
+
+  vacateRoom: (allotmentId: string) =>
+    api.patch<ApiResponse<any>>(`/hostel/vacate/${allotmentId}`),
+};
+```
+
+---
+
+## 20. Transport Service — `src/services/transport.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export const transportService = {
+  createVehicle: (data: { vehicle_no: string; vehicle_name?: string; vehicle_type?: string; vehicle_capacity?: number; vehicle_driver_name?: string; vehicle_driver_phone?: string; vehicle_driver_license?: string }) =>
+    api.post<ApiResponse<any>>("/transport/vehicle/create", data),
+
+  listVehicles: (params?: { page?: number; limit?: number }) =>
+    api.get<PaginatedResponse<any>>("/transport/vehicle/list", { params }),
+
+  createRoute: (data: { route_name: string; route_vehicle_id?: string; route_stops?: Array<{ stop_name: string; stop_distance?: number; stop_fare?: number }> }) =>
+    api.post<ApiResponse<any>>("/transport/route/create", data),
+
+  listRoutes: () =>
+    api.get<ApiResponse<any[]>>("/transport/route/list"),
+
+  assign: (data: { student_id: string; route_id: string; vehicle_id: string; pickup_stop?: string; drop_stop?: string; monthly_fare?: number }) =>
+    api.post<ApiResponse<any>>("/transport/assign", data),
+
+  getAssignments: (params?: { page?: number; limit?: number; route_id?: string }) =>
+    api.get<PaginatedResponse<any>>("/transport/assignments", { params }),
+};
+```
+
+---
+
+## 21. Admission Service — `src/services/admission.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, AdmissionStatus, Gender } from "../types";
+
+export interface CreateAdmissionPayload {
+  applicant_name: string;
+  applicant_dob: string;
+  applicant_gender: Gender;
+  applicant_phone: string;
+  applicant_email?: string;
+  applicant_address?: string;
+  admission_class_id?: string;
+  admission_session?: string;
+  father_name?: string;
+  father_phone?: string;
+  mother_name?: string;
+  mother_phone?: string;
+  previous_school?: string;
+  previous_class?: string;
+  admission_documents?: string[];
+}
+
+export const admissionService = {
+  create: (data: CreateAdmissionPayload) =>
+    api.post<ApiResponse<any>>("/admission/create", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string; status?: AdmissionStatus }) =>
+    api.get<PaginatedResponse<any>>("/admission/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/admission/${id}`),
+
+  updateStatus: (id: string, status: AdmissionStatus, notes?: string) =>
+    api.patch<ApiResponse<any>>(`/admission/status/${id}`, { status, notes }),
+};
+```
+
+---
+
+## 22. Complaint Service — `src/services/complaint.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse, ComplaintStatus } from "../types";
+
+export const complaintService = {
+  raise: (data: { complaint_title: string; complaint_description: string; complaint_type?: string; complaint_against?: string; complaint_attachments?: string[] }) =>
+    api.post<ApiResponse<any>>("/complaint/raise", data),
+
+  list: (params?: { page?: number; limit?: number; status?: ComplaintStatus }) =>
+    api.get<PaginatedResponse<any>>("/complaint/list", { params }),
+
+  updateStatus: (id: string, status: ComplaintStatus, resolution_note?: string) =>
+    api.patch<ApiResponse<any>>(`/complaint/status/${id}`, { status, resolution_note }),
+};
+```
+
+---
+
+## 23. Dashboard Service — `src/services/dashboard.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse } from "../types";
+
+export interface DashboardStats {
+  overview: {
+    total_students: number;
+    active_students: number;
+    total_teachers: number;
+    total_staff: number;
+    total_classes: number;
+  };
+  attendance_today: {
+    present: number;
+    absent: number;
+    total: number;
+    percentage: string;
+  };
+  finance: {
+    monthly_fee_collected: number;
+  };
+  alerts: {
+    pending_leaves: number;
+    open_complaints: number;
+    pending_admissions: number;
+    overdue_books: number;
+  };
+  upcoming_exams: any[];
+  recent_announcements: any[];
+}
+
+export const dashboardService = {
+  getStats: () =>
+    api.get<ApiResponse<DashboardStats>>("/dashboard/stats"),
+};
+```
+
+---
+
+## 24. Role Service — `src/services/role.service.ts`
+
+```typescript
+import api from "../lib/api";
+import { ApiResponse, PaginatedResponse } from "../types";
+
+export interface CreateRolePayload {
+  role_name: string;
+  role_display_name: string;
+  role_description: string;
+  role_permissions: string[];
+}
+
+export const roleService = {
+  create: (data: CreateRolePayload) =>
+    api.post<ApiResponse<any>>("/role/add", data),
+
+  list: (params?: { page?: number; limit?: number; search?: string }) =>
+    api.get<PaginatedResponse<any>>("/role/list", { params }),
+
+  getById: (id: string) =>
+    api.get<ApiResponse<any>>(`/role/${id}`),
+
+  update: (id: string, data: Partial<CreateRolePayload>) =>
+    api.patch<ApiResponse<any>>(`/role/${id}`, data),
+
+  delete: (id: string) =>
+    api.delete<ApiResponse<null>>(`/role/${id}`),
+};
+```
+
+
+---
+
+## 25. Complete Services Index — `src/services/index.ts`
+
+```typescript
+export { authService, getRedirectPath } from "./auth.service";
+export { organizationService } from "./organization.service";
+export { classService } from "./class.service";
+export { sectionService } from "./section.service";
+export { subjectService } from "./subject.service";
+export { teacherService } from "./teacher.service";
+export { studentService } from "./student.service";
+export { staffService } from "./staff.service";
+export { attendanceService } from "./attendance.service";
+export { examService, markService } from "./exam.service";
+export { feeService } from "./fee.service";
+export { timetableService } from "./timetable.service";
+export { homeworkService } from "./homework.service";
+export { announcementService } from "./announcement.service";
+export { eventService } from "./event.service";
+export { leaveService } from "./leave.service";
+export { salaryService } from "./salary.service";
+export { libraryService } from "./library.service";
+export { hostelService } from "./hostel.service";
+export { transportService } from "./transport.service";
+export { admissionService } from "./admission.service";
+export { complaintService } from "./complaint.service";
+export { dashboardService } from "./dashboard.service";
+export { roleService } from "./role.service";
+```
+
+---
+
+## 26. Usage Examples
+
+### Register + Onboarding
+```typescript
+import { authService, getRedirectPath } from "../services";
+
+// Step 1 — Register
+const res = await authService.register({
+  user_name: "Rahul Sharma",
+  user_email: "rahul@gmail.com",
+  user_phone: "9876543210",
+  user_password: "Rahul@123",
+  user_country: "India",
+  user_business_type: "School",
+});
+// Show "Check your email" screen
+
+// Step 2 — When user clicks email link
+// URL: /verify-email?token=abc123
+const token = new URLSearchParams(window.location.search).get("token");
+const verifyRes = await authService.verifyEmail(token!);
+if (!verifyRes.data.data.user_hasBusiness) {
+  navigate("/setup-school");
+}
+
+// Step 3 — Setup school
+const setupRes = await authService.setupOrganization({
+  organization_name: "Delhi Public School",
+  organization_phone: "0112345678",
+  organization_email: "info@dps.edu.in",
+  organization_country: "India",
+});
+navigate("/dashboard");
+```
+
+### Login with routing
+```typescript
+const { data } = await authService.login({ user_email, user_password });
+navigate(getRedirectPath(data.data.user));
+```
+
+### Bulk academic setup (onboarding)
+```typescript
+await organizationService.bulkCreateStructure([
+  {
+    class_name: "Class 10", class_numeric: 10,
+    sections: ["A", "B", "C"],
+    subjects: [
+      { subject_name: "Mathematics", subject_code: "MATH-10" },
+      { subject_name: "Science",     subject_code: "SCI-10" },
+      { subject_name: "English",     subject_code: "ENG-10" },
     ],
-    "summary": {
-      "total_obtained": 177,
-      "total_full": 200,
-      "percentage": "88.50",
-      "overall_grade": "A",
-      "result": "Pass"
+  },
+  {
+    class_name: "Class 11", class_numeric: 11,
+    sections: ["A", "B"],
+    subjects: [
+      { subject_name: "Physics",   subject_code: "PHY-11" },
+      { subject_name: "Chemistry", subject_code: "CHE-11" },
+    ],
+  },
+]);
+```
+
+### Mark attendance
+```typescript
+await attendanceService.mark({
+  class_id: "66cls",
+  section_id: "66sec",
+  attendance_date: "2024-01-15",
+  attendance_records: students.map((s) => ({
+    student_id: s._id,
+    status: presentIds.includes(s._id) ? "Present" : "Absent",
+  })),
+});
+```
+
+### Collect fee
+```typescript
+await feeService.collect({
+  student_id: "66stu",
+  fee_structure_id: "66fee",
+  collection_amount_paid: 3500,
+  collection_payment_mode: "Cash",
+  collection_month: "January 2024",
+});
+```
+
+### Enter marks
+```typescript
+await markService.enter({
+  exam_id: "66exam",
+  subject_id: "66sub",
+  class_id: "66cls",
+  marks: students.map((s) => ({
+    student_id: s._id,
+    mark_obtained: marksMap[s._id],
+    mark_full: 100,
+    mark_pass: 33,
+  })),
+});
+```
+
+### Get result card
+```typescript
+const { data } = await markService.getResultCard(studentId, examId);
+const { marks, summary } = data.data;
+// summary.result === "Pass" | "Fail"
+// summary.percentage === "88.50"
+// summary.overall_grade === "A"
+```
+
+---
+
+## 27. Error Handling Pattern
+
+```typescript
+import { AxiosError } from "axios";
+
+const handleApiError = (error: unknown): string => {
+  if (error instanceof AxiosError) {
+    // Validation errors (422)
+    if (error.response?.data?.errors) {
+      return error.response.data.errors
+        .map((e: any) => `${e.field}: ${e.message}`)
+        .join(", ");
     }
+    return error.response?.data?.message || "Something went wrong";
   }
+  return "Network error";
+};
+
+// Usage in component / service call
+try {
+  await teacherService.create(payload);
+} catch (err) {
+  const message = handleApiError(err);
+  toast.error(message);
 }
 ```
 
 ---
 
-### 11.5 Get Marks by Exam (for a subject)
-```
-GET /mark/by-exam?exam_id=66exam...&subject_id=66sub...&class_id=66cls...
-```
+## 28. HTTP Status → UI Action
 
-### 11.6 Get Student All Marks
-```
-GET /mark/student/:student_id?exam_id=66exam...
-```
-
----
-
-## 12. Fee APIs
-
-> 🔒 Auth required
-
-### 12.1 Create Fee Structure
-```
-POST /fee/structure/create
-```
-```json
-{
-  "class_id": "66cls...",
-  "fee_title": "Tuition Fee",
-  "fee_description": "Monthly tuition charges",
-  "fee_amount": 3500,
-  "fee_frequency": "Monthly",
-  "fee_due_day": 10,
-  "fee_session": "2024-25"
-}
-```
-> `fee_frequency` enum: `"Monthly" | "Quarterly" | "Annually" | "OneTime"`
-
-### 12.2 List Fee Structures
-```
-GET /fee/structure/list?class_id=66cls...&page=1&limit=20
-```
+| Status | Meaning | UI Action |
+|--------|---------|-----------|
+| `200` | OK | Show data |
+| `201` | Created | Show success + navigate |
+| `400` | Bad Request | Show error message |
+| `401` | Unauthorized | Redirect to `/login` |
+| `403` | Forbidden | Show "No permission" |
+| `404` | Not Found | Show "Not found" |
+| `409` | Conflict | Show "Already exists" |
+| `422` | Validation | Show field errors from `errors[]` |
+| `500` | Server Error | Show "Something went wrong" |
 
 ---
 
-### 12.3 Collect Fee Payment
-```
-POST /fee/collect
-```
-```json
-{
-  "student_id": "66stu...",
-  "fee_structure_id": "66fee...",
-  "collection_amount_paid": 3500,
-  "collection_discount": 0,
-  "collection_fine": 50,
-  "collection_payment_mode": "Cash",
-  "collection_month": "January 2024",
-  "collection_remarks": "Paid with late fine"
-}
-```
-> `collection_payment_mode` enum: `"Cash" | "Online" | "Cheque" | "Bank Transfer"`  
-> `collection_receipt_no` auto-generated server-side
+## 29. Folder Structure Suggestion
 
-**Response `201`:**
-```json
-{
-  "data": {
-    "_id": "...",
-    "collection_receipt_no": "RCP-0001-123456",
-    "collection_amount_paid": 3500,
-    "collection_total_amount": 3550,
-    "collection_payment_mode": "Cash",
-    "collection_payment_date": "2024-01-15T00:00:00.000Z"
-  }
-}
 ```
-
----
-
-### 12.4 Student Fee History
+src/
+├── lib/
+│   └── api.ts              ← Axios instance
+├── types/
+│   └── index.ts            ← All TypeScript types
+├── services/
+│   ├── index.ts            ← Re-export all
+│   ├── auth.service.ts
+│   ├── organization.service.ts
+│   ├── class.service.ts
+│   ├── section.service.ts
+│   ├── subject.service.ts
+│   ├── teacher.service.ts
+│   ├── student.service.ts
+│   ├── staff.service.ts
+│   ├── attendance.service.ts
+│   ├── exam.service.ts
+│   ├── fee.service.ts
+│   ├── timetable.service.ts
+│   ├── homework.service.ts
+│   ├── announcement.service.ts
+│   ├── event.service.ts
+│   ├── leave.service.ts
+│   ├── salary.service.ts
+│   ├── library.service.ts
+│   ├── hostel.service.ts
+│   ├── transport.service.ts
+│   ├── admission.service.ts
+│   ├── complaint.service.ts
+│   ├── dashboard.service.ts
+│   └── role.service.ts
+└── pages/
+    ├── auth/
+    │   ├── Login.tsx
+    │   ├── Register.tsx
+    │   ├── VerifyEmail.tsx
+    │   └── SetupSchool.tsx
+    └── dashboard/
+        └── Dashboard.tsx
 ```
-GET /fee/student/:student_id
-```
-**Response:**
-```json
-{
-  "data": [ { "collection_receipt_no": "RCP-0001-...", "collection_amount_paid": 3500, "..." } ],
-  "summary": { "total_paid": 42000, "total_fine": 100 }
-}
-```
-
-### 12.5 All Collections
-```
-GET /fee/collections?page=1&limit=20&start_date=2024-01-01&end_date=2024-01-31
-```
-
-### 12.6 Fee Stats (Monthly)
-```
-GET /fee/stats?month=1&year=2024
-```
-**Response:**
-```json
-{
-  "data": {
-    "total_collected": 350000,
-    "total_fine": 2500,
-    "total_discount": 5000,
-    "total_balance": 12000,
-    "count": 95
-  }
-}
-```
-
----
