@@ -4,6 +4,12 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const startServer = async () => {
+  console.log({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    user: process.env.SMTP_USER,
+    passExists: !!process.env.SMTP_PASS,
+  });
   try {
     await connectDB();
 
