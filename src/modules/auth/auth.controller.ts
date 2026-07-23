@@ -19,16 +19,31 @@ import {
 } from "./auth.validation";
 
 // ─── Cookie helpers ───────────────────────────────────────────
+// const COOKIE_OPTIONS = (maxAgeMs: number) => ({
+//   httpOnly: true,
+//   secure: process.env.NODE_ENV === "production",
+//   sameSite: "strict" as const,
+//   maxAge: maxAgeMs,
+// });
+
 const COOKIE_OPTIONS = (maxAgeMs: number) => ({
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "strict" as const,
+  secure: true,
+  sameSite: "none" as const,
   maxAge: maxAgeMs,
 });
 
-const setAuthCookies = (res: Response, accessToken: string, refreshToken: string) => {
-  res.cookie("accessToken", accessToken, COOKIE_OPTIONS(24 * 60 * 60 * 1000));        // 1 day
-  res.cookie("refreshToken", refreshToken, COOKIE_OPTIONS(7 * 24 * 60 * 60 * 1000));  // 7 days
+const setAuthCookies = (
+  res: Response,
+  accessToken: string,
+  refreshToken: string,
+) => {
+  res.cookie("accessToken", accessToken, COOKIE_OPTIONS(24 * 60 * 60 * 1000)); // 1 day
+  res.cookie(
+    "refreshToken",
+    refreshToken,
+    COOKIE_OPTIONS(7 * 24 * 60 * 60 * 1000),
+  ); // 7 days
 };
 
 const clearAuthCookies = (res: Response) => {
@@ -86,7 +101,9 @@ export const Register = async (req: Request, res: Response) => {
     }
 
     // ORGANIZATION_ADMIN role assign hoga
-    const orgAdminRole = await Role.findOne({ role_name: "ORGANIZATION_ADMIN" });
+    const orgAdminRole = await Role.findOne({
+      role_name: "ORGANIZATION_ADMIN",
+    });
     if (!orgAdminRole) {
       return res.status(500).json({
         success: false,
@@ -119,7 +136,8 @@ export const Register = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message: "Account created! Please check your email to verify your account.",
+      message:
+        "Account created! Please check your email to verify your account.",
       data: {
         user_id: user._id,
         user_email: user.user_email,
@@ -143,7 +161,9 @@ export const VerifyEmail = async (req: Request, res: Response) => {
   const token = req.query.token as string;
   try {
     if (!token) {
-      return res.status(400).json({ success: false, message: "Token is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Token is required" });
     }
 
     const user = await User.findOne({
@@ -154,7 +174,8 @@ export const VerifyEmail = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Invalid or expired verification link. Please request a new one.",
+        message:
+          "Invalid or expired verification link. Please request a new one.",
       });
     }
 
@@ -195,7 +216,9 @@ export const ResendVerificationEmail = async (req: Request, res: Response) => {
   try {
     const { user_email } = req.body;
     if (!user_email) {
-      return res.status(400).json({ success: false, message: "Email is required" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Email is required" });
     }
 
     const user = await User.findOne({ user_email });
@@ -216,7 +239,9 @@ export const ResendVerificationEmail = async (req: Request, res: Response) => {
 
     const token = crypto.randomBytes(32).toString("hex");
     user.user_emailVerificationToken = token;
-    user.user_emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    user.user_emailVerificationExpires = new Date(
+      Date.now() + 24 * 60 * 60 * 1000,
+    );
     await user.save();
 
     await sendVerificationEmail(
@@ -248,7 +273,9 @@ export const SetupOrganization = async (req: Request, res: Response) => {
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     }
 
     if (!user.user_isEmailVerified) {
@@ -316,7 +343,10 @@ export const Login = async (req: Request, res: Response) => {
       });
     }
 
-    const isPasswordValid = await bcrypt.compare(user_password, user.user_password);
+    const isPasswordValid = await bcrypt.compare(
+      user_password,
+      user.user_password,
+    );
     if (!isPasswordValid) {
       return res.status(401).json({
         success: false,
@@ -370,7 +400,9 @@ export const RefreshToken = async (req: Request, res: Response) => {
   try {
     const token = req.cookies?.refreshToken;
     if (!token) {
-      return res.status(401).json({ success: false, message: "Refresh token not found" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Refresh token not found" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET!) as {
@@ -381,7 +413,9 @@ export const RefreshToken = async (req: Request, res: Response) => {
 
     const user = await User.findById(decoded.userId);
     if (!user || !user.user_isActive) {
-      return res.status(401).json({ success: false, message: "Invalid session" });
+      return res
+        .status(401)
+        .json({ success: false, message: "Invalid session" });
     }
 
     const payload = {
@@ -395,7 +429,12 @@ export const RefreshToken = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, message: "Token refreshed" });
   } catch (error: any) {
     clearAuthCookies(res);
-    return res.status(401).json({ success: false, message: "Session expired. Please login again." });
+    return res
+      .status(401)
+      .json({
+        success: false,
+        message: "Session expired. Please login again.",
+      });
   }
 };
 
@@ -404,7 +443,9 @@ export const RefreshToken = async (req: Request, res: Response) => {
 // ─────────────────────────────────────────────────────────────
 export const Logout = async (req: Request, res: Response) => {
   clearAuthCookies(res);
-  return res.status(200).json({ success: true, message: "Logged out successfully" });
+  return res
+    .status(200)
+    .json({ success: true, message: "Logged out successfully" });
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -456,7 +497,8 @@ export const ResetPassword = async (req: Request, res: Response) => {
     if (!user) {
       return res.status(400).json({
         success: false,
-        message: "Reset link is invalid or has expired. Please request a new one.",
+        message:
+          "Reset link is invalid or has expired. Please request a new one.",
       });
     }
 
@@ -480,11 +522,15 @@ export const ResetPassword = async (req: Request, res: Response) => {
 export const ChangePassword = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.userId;
-    const { current_password, new_password } = changePasswordSchema.parse(req.body);
+    const { current_password, new_password } = changePasswordSchema.parse(
+      req.body,
+    );
 
     const user = await User.findById(userId);
     if (!user) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res
+        .status(404)
+        .json({ success: false, message: "User not found" });
     }
 
     const isValid = await bcrypt.compare(current_password, user.user_password);
