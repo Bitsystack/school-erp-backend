@@ -47,8 +47,21 @@ const setAuthCookies = (
 };
 
 const clearAuthCookies = (res: Response) => {
-  res.clearCookie("accessToken");
-  res.clearCookie("refreshToken");
+  res.cookie("accessToken", "", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    path: "/",
+    expires: new Date(0),
+  });
+
+  res.cookie("refreshToken", "", {
+    httpOnly: true,
+    secure: true,
+    sameSite: "none",
+    path: "/",
+    expires: new Date(0),
+  });
 };
 
 // ─── Build safe user response object ─────────────────────────
@@ -429,12 +442,10 @@ export const RefreshToken = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, message: "Token refreshed" });
   } catch (error: any) {
     clearAuthCookies(res);
-    return res
-      .status(401)
-      .json({
-        success: false,
-        message: "Session expired. Please login again.",
-      });
+    return res.status(401).json({
+      success: false,
+      message: "Session expired. Please login again.",
+    });
   }
 };
 
