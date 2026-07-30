@@ -32,6 +32,14 @@ import admissionRoutes from "./modules/admissions/admission.routes";
 import complaintRoutes from "./modules/complaints/complaint.routes";
 import dashboardRoutes from "./modules/dashboard/dashboard.routes";
 
+// New Enterprise Scale Modules
+import certificateRoutes from "./modules/certificates/certificate.routes";
+import inventoryRoutes from "./modules/inventory/inventory.routes";
+import biometricRoutes from "./modules/biometric/biometric.routes";
+import notificationRoutes from "./modules/notifications/notification.routes";
+import visitorRoutes from "./modules/visitors/visitor.routes";
+import subscriptionRoutes from "./modules/subscriptions/subscription.routes";
+
 // Middleware
 import { errorMiddleware } from "./middlewares/error.middleware";
 
@@ -110,6 +118,14 @@ app.use("/api/v1/admission", admissionRoutes);
 
 // Dashboard
 app.use("/api/v1/dashboard", dashboardRoutes);
+
+// New Enterprise Scale Modules (100k Users)
+app.use("/api/v1/certificate", certificateRoutes);
+app.use("/api/v1/inventory", inventoryRoutes);
+app.use("/api/v1/biometric", biometricRoutes);
+app.use("/api/v1/notification", notificationRoutes);
+app.use("/api/v1/visitor", visitorRoutes);
+app.use("/api/v1/subscription", subscriptionRoutes);
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.use((_req: Request, res: Response) => {
